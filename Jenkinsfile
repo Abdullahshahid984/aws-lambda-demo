@@ -29,7 +29,7 @@ pipeline {
             steps {
                 sh '''
                     echo "Zipping all required files for Lambda deployment..."
-                    zip -r lambda_package.zip test \
+                    zip -r $ZIP_FILE test \
                         -x ".git/*" \
                         -x "README.md" \
                         -x "Jenkinsfile"
