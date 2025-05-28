@@ -30,9 +30,12 @@ pipeline {
                 sh '''
                     echo "Zipping all required files for Lambda deployment..."
                     zip -r $ZIP_FILE test \
-                        -x ".git/*" \
-                        -x "README.md" \
-                        -x "Jenkinsfile"
+                        -x "**/.git/*" \
+                        -x "**/README.md" \
+                        -x "**/Jenkinsfile"
+
+                    echo "Listing contents of the zip file to verify structure:"
+                    unzip -l $ZIP_FILE
                 '''
             }
         }
