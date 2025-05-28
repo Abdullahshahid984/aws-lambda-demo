@@ -29,7 +29,10 @@ pipeline {
             steps {
                 sh '''
                     echo "Zipping entire repository contents excluding .git folder..."
-                    zip -r $ZIP_FILE . -x ".git/*"
+                    zip -r $ZIP_FILE 
+                        -x "**/.git/*" \
+                        -x "**/README.md" \
+                        -x "**/Jenkinsfile"
                 '''
             }
         }
