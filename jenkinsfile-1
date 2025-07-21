@@ -17,5 +17,3 @@ pipeline {
   }
 
   // Optional: Add post steps if you want quality gate integration
-}
-
