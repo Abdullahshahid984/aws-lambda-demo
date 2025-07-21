@@ -8,8 +8,9 @@ pipeline {
   stages {
     stage('SonarQube Scan') {
       steps {
-        withSonarQubeEnv('sq1') {
-          sh "${SONAR_SCANNER_HOME}/bin/sonar-scanner -Dsonar.projectKey=lambda-function-Dsonar.sources=. -Dsonar.login=squ_ea14e84623a1cb09584c9445c1e4be71141820b3"
+        withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'TOKEN')]) {
+         sh 'sonar-scanner -Dsonar.projectKey=lambda-function -Dsonar.sources=. -Dsonar.login=$TOKEN'
+         }
         }
       }
     }
