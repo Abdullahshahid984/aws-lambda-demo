@@ -1,15 +1,20 @@
 pipeline {
-  agent  any
-  tools {
-    sonarQubeScanner 'SonarScanner'
+  agent any
+
+  environment {
+    SONAR_SCANNER_HOME = tool name: 'SonarScanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
   }
+
   stages {
     stage('SonarQube Scan') {
       steps {
         withSonarQubeEnv('sq1') {
-          sh 'sonar-scanner -Dsonar.projectKey=lambda-function -Dsonar.sources=. -Dsonar.login=squ_ea14e84623a1cb09584c9445c1e4be71141820b3'
+          sh "${SONAR_SCANNER_HOME}/bin/sonar-scanner -Dsonar.projectKey=lambda-function-Dsonar.sources=. -Dsonar.login=squ_ea14e84623a1cb09584c9445c1e4be71141820b3"
         }
       }
     }
   }
+
+  // Optional: Add post steps if you want quality gate integration
 }
+
