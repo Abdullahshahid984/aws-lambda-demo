@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        FUNCTION_NAME = 'hello-demo'
+        FUNCTION_NAME = 'hey-world-demo'
         REGION = 'us-east-1'
         ZIP_FILE = "lambda_package.zip"
         ARN_FILE = 'lambda_arn.txt'
@@ -39,61 +39,53 @@ pipeline {
                 '''
             }
         }
-      stage('Setup IAM Role') {
-         steps {
-          withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'lambda-function-aws-cred',
-            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-        ]])  {
-            sh '''
-                echo "Creating IAM role for Lambda if it doesn't exist..."
-                aws iam get-role --role-name lambda_basic_execution || \
-                aws iam create-role \
-                    --role-name lambda_basic_execution \
-                    --assume-role-policy-document file://trust-policy.json
 
-                echo "Attaching policy..."
-                aws iam attach-role-policy \
-                    --role-name lambda_basic_execution \
-                    --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole || true
+        stage('Deploy Lambda') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'lambda-function-aws-cred',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh '''
+                        echo "Creating Lambda function..."
+                        aws lambda create-function \
+                            --function-name $FUNCTION_NAME \
+                            --runtime python3.13 \
+                            --role arn:aws:iam::529088259986:role/service-role/s3_execRole \
+                            --handler test.devtest.lambda_function.lambda_handler \
+                            --zip-file fileb://$ZIP_FILE \
+                            --region $REGION || true
 
-                echo "Fetching IAM Role ARN..."
-                ROLE_ARN=$(aws iam get-role \
-                    --role-name lambda_basic_execution \
-                    --query 'Role.Arn' \
-                    --output text)
-                echo $ROLE_ARN > role_arn.txt
-            '''
-             }
-        }
-    }
-    stage('Deploy Lambda') {
-      steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'lambda-function-aws-cred',
-            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-        ]]) {
-            sh '''
-                echo "Reading IAM Role ARN..."
-                ROLE_ARN=$(cat role_arn.txt)
+                        echo "Waiting for Lambda function to become Active..."
+                        while true; do
+                            STATUS=$(aws lambda get-function-configuration \
+                                --function-name $FUNCTION_NAME \
+                                --region $REGION \
+                                --query 'State' --output text)
+                            echo "Current status: $STATUS"
+                            if [ "$STATUS" = "Active" ]; then
+                                break
+                            fi
+                            sleep 5
+                        done
 
-                echo "Creating Lambda function..."
-                aws lambda create-function \
-                    --function-name $FUNCTION_NAME \
-                    --runtime python3.13 \
-                    --role $ROLE_ARN \
-                    --handler test.devtest.lambda_function.lambda_handler \
-                    --zip-file fileb://$ZIP_FILE \
-                    --region $REGION || true
+                        echo "Updating function code..."
+                        aws lambda update-function-code \
+                            --function-name $FUNCTION_NAME \
+                            --zip-file fileb://$ZIP_FILE \
+                            --region $REGION
 
-                # rest of your deployment logic remains unchanged...
-            '''
+                        echo "Getting Lambda ARN..."
+                        aws lambda get-function \
+                            --function-name $FUNCTION_NAME \
+                            --region $REGION \
+                            --query 'Configuration.FunctionArn' \
+                            --output text > $ARN_FILE
+                    '''
+                }
             }
-           }
         }
 
         stage('Setup CloudWatch Schedule') {
