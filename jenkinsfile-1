@@ -8,7 +8,7 @@ pipeline {
   stages {
     stage('SonarQube Scan') {
       steps {
-        withSonarQubeEnv('MySonarQube') { // Replace with the exact name from "Configure System"
+        withSonarQubeEnv('sq1') { // ✅ Matches configured SonarQube server name
           withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'TOKEN')]) {
             sh "${SONAR_SCANNER_HOME}/bin/sonar-scanner " +
                "-Dsonar.projectKey=lambda-function " +
