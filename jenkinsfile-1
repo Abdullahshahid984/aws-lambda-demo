@@ -8,12 +8,15 @@ pipeline {
   stages {
     stage('SonarQube Scan') {
       steps {
-        withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'TOKEN')]) {
-         sh 'sonar-scanner -Dsonar.projectKey=lambda-function -Dsonar.sources=. -Dsonar.login=$TOKEN'
-         }
+        withSonarQubeEnv('MySonarQube') { // Replace with the exact name from "Configure System"
+          withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'TOKEN')]) {
+            sh "${SONAR_SCANNER_HOME}/bin/sonar-scanner " +
+               "-Dsonar.projectKey=lambda-function " +
+               "-Dsonar.sources=. " +
+               "-Dsonar.login=$TOKEN"
+          }
         }
       }
     }
   }
-
-  // Optional: Add post steps if you want quality gate integration
+}
