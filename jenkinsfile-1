@@ -1,15 +1,14 @@
 pipeline {
   agent  any
-  options {
-    buildDiscarder(logRotator(numToKeepStr: '5'))
+  o tools {
+    sonarQubeScanner 'SonarScanner'
   }
   stages {
-    stage('Scan') {
+    stage('SonarQube Scan') {
       steps {
-        withSonarQubeEnv(installationName: 'sq1') { 
-          sh './mvnw clean org.sonarsource.scanner.maven:sonar-maven-plugin:3.9.0.2155:sonar'
+        withSonarQubeEnv('sq1') {
+          sh 'sonar-scanner -Dsonar.projectKey=lambda-function -Dsonar.sources=. -Dsonar.login=squ_ea14e84623a1cb09584c9445c1e4be71141820b3'
         }
       }
     }
   }
-}
