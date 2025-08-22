@@ -11,6 +11,7 @@ pipeline {
 
     parameters {
         string defaultValue: 'main', description: 'Enter git branch', name: 'GIT_BRANCH', trim: true
+        choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Choose deployment environment')
     }
 
     stages {
