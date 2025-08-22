@@ -43,25 +43,25 @@ pipeline {
         }
 
         // ✅ New SonarQube Stage
-        stage('SonarQube Scan') {
-            steps {
-                withSonarQubeEnv('sq1') { // This must match your Jenkins SonarQube server name
-                    withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'TOKEN')]) {
-                        sh '''
-                            echo "Running SonarQube Scan..."
-                            ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
-                            -Dsonar.projectKey=aws-lambda-demo \
-                            -Dsonar.sources=test \
-                            -Dsonar.login=$TOKEN
-                        '''
-                    }
-                }
-            }
-        }
+      //  stage('SonarQube Scan') {
+       //     steps {
+        //        withSonarQubeEnv('sq1') { // This must match your Jenkins SonarQube server name
+         //           withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'TOKEN')]) {
+          //              sh '''
+           //                 echo "Running SonarQube Scan..."
+           //                 ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
+             //               -Dsonar.projectKey=aws-lambda-demo \
+              //              -Dsonar.sources=test \
+                //            -Dsonar.login=$TOKEN
+                 //       '''
+               //     }
+               // }
+           // }
+        //}
 
         stage('Deploy Lambda') {
             steps {
-                withCredentials([[ 
+                withCredentials([[
                     $class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'lambda-function-aws-cred',
                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
@@ -109,7 +109,7 @@ pipeline {
 
         stage('Setup CloudWatch Schedule') {
             steps {
-                withCredentials([[ 
+                withCredentials([[
                     $class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'lambda-function-aws-cred',
                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
