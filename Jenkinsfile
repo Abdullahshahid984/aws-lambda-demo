@@ -24,13 +24,13 @@ pipeline {
             }
             steps {
                 withSonarQubeEnv('SonarQubeServer') {
-                    sh """
+                    sh '''
                         sonar-scanner \
-                          -Dsonar.projectKey=${FUNCTION_NAME} \
+                          -Dsonar.projectKey=hello-world-lambda \
                           -Dsonar.sources=. \
                           -Dsonar.host.url=$SONAR_HOST_URL \
                           -Dsonar.login=$SONAR_TOKEN
-                    """
+                    '''
                 }
             }
         }
@@ -43,13 +43,13 @@ pipeline {
                                   'aws-cred-prod'
 
                     withAWS(credentials: awsCred, region: env.REGION) {
-                        sh """
+                        sh '''
                             zip function.zip lambda_function.py
                             aws lambda update-function-code \
-                                --function-name ${FUNCTION_NAME}-${params.ENV} \
+                                --function-name ''' + "${FUNCTION_NAME}-${params.ENV}" + ''' \
                                 --zip-file fileb://function.zip \
-                                --region ${REGION}
-                        """
+                                --region ''' + "${REGION}" + '''
+                        '''
                     }
                 }
             }
@@ -63,23 +63,23 @@ pipeline {
                                   'aws-cred-prod'
 
                     withAWS(credentials: awsCred, region: env.REGION) {
-                        sh """
+                        sh '''
                             aws events put-rule \
-                                --name ${FUNCTION_NAME}-schedule-${params.ENV} \
+                                --name ''' + "${FUNCTION_NAME}-schedule-${params.ENV}" + ''' \
                                 --schedule-expression "rate(5 minutes)" \
-                                --region ${REGION}
+                                --region ''' + "${REGION}" + '''
 
                             aws lambda add-permission \
-                                --function-name ${FUNCTION_NAME}-${params.ENV} \
-                                --statement-id ${FUNCTION_NAME}-event-${params.ENV} \
+                                --function-name ''' + "${FUNCTION_NAME}-${params.ENV}" + ''' \
+                                --statement-id ''' + "${FUNCTION_NAME}-event-${params.ENV}" + ''' \
                                 --action 'lambda:InvokeFunction' \
                                 --principal events.amazonaws.com \
-                                --source-arn arn:aws:events:${REGION}:\\$(aws sts get-caller-identity --query Account --output text):rule/${FUNCTION_NAME}-schedule-${params.ENV}
+                                --source-arn arn:aws:events:''' + "${REGION}" + ''':$(aws sts get-caller-identity --query Account --output text):rule/''' + "${FUNCTION_NAME}-schedule-${params.ENV}" + '''
 
                             aws events put-targets \
-                                --rule ${FUNCTION_NAME}-schedule-${params.ENV} \
-                                --targets "Id"="1","Arn"="\\$(aws lambda get-function --function-name ${FUNCTION_NAME}-${params.ENV} --query 'Configuration.FunctionArn' --output text)"
-                        """
+                                --rule ''' + "${FUNCTION_NAME}-schedule-${params.ENV}" + ''' \
+                                --targets "Id"="1","Arn"="$(aws lambda get-function --function-name ''' + "${FUNCTION_NAME}-${params.ENV}" + ''' --query 'Configuration.FunctionArn' --output text)"
+                        '''
                     }
                 }
             }
