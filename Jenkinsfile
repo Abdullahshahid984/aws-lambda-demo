@@ -91,21 +91,21 @@ pipeline {
                         sh """
                             echo "Creating/Updating CloudWatch Event Rule..."
                             aws events put-rule \
-                              --name ${env.FUNCTION_NAME}-${params.ENV}-schedule \
+                              --name "${env.FUNCTION_NAME}-${params.ENV}-schedule" \
                               --schedule-expression "rate(5 minutes)"
 
                             echo "Adding Lambda target to CloudWatch Rule..."
                             aws events put-targets \
-                              --rule ${env.FUNCTION_NAME}-${params.ENV}-schedule \
-                              --targets "Id"="1","Arn"="$(aws lambda get-function --function-name ${env.FUNCTION_NAME}-${params.ENV} --query 'Configuration.FunctionArn' --output text)"
+                              --rule "${env.FUNCTION_NAME}-${params.ENV}-schedule" \
+                              --targets "Id=1,Arn=$(aws lambda get-function --function-name ${env.FUNCTION_NAME}-${params.ENV} --query 'Configuration.FunctionArn' --output text)"
 
                             echo "Adding permission for events to invoke Lambda..."
                             aws lambda add-permission \
-                              --function-name ${env.FUNCTION_NAME}-${params.ENV} \
-                              --statement-id ${env.FUNCTION_NAME}-${params.ENV}-invoke \
+                              --function-name "${env.FUNCTION_NAME}-${params.ENV}" \
+                              --statement-id "${env.FUNCTION_NAME}-${params.ENV}-invoke" \
                               --action 'lambda:InvokeFunction' \
                               --principal events.amazonaws.com \
-                              --source-arn \$(aws events describe-rule --name ${env.FUNCTION_NAME}-${params.ENV}-schedule --query 'Arn' --output text) || true
+                              --source-arn "$(aws events describe-rule --name ${env.FUNCTION_NAME}-${params.ENV}-schedule --query 'Arn' --output text)" || true
                         """
                     }
                 }
