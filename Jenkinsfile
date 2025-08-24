@@ -1,6 +1,9 @@
 pipeline {
     agent any
-
+    parameters {
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'stage', 'prod'], description: 'Deployment environment')
+    string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Git branch to deploy')
+  }
     environment {
         AWS_REGION = credentials('AWS_REGION')
         AWS_ACCESS_KEY_ID = credentials('AWS_ACCESS_KEY_ID')
