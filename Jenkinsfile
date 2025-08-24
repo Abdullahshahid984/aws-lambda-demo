@@ -74,11 +74,11 @@ pipeline {
                                 --statement-id ${FUNCTION_NAME}-event-${params.ENV} \
                                 --action 'lambda:InvokeFunction' \
                                 --principal events.amazonaws.com \
-                                --source-arn arn:aws:events:${REGION}:$(aws sts get-caller-identity --query Account --output text):rule/${FUNCTION_NAME}-schedule-${params.ENV}
+                                --source-arn arn:aws:events:${REGION}:\\$(aws sts get-caller-identity --query Account --output text):rule/${FUNCTION_NAME}-schedule-${params.ENV}
 
                             aws events put-targets \
                                 --rule ${FUNCTION_NAME}-schedule-${params.ENV} \
-                                --targets "Id"="1","Arn"="$(aws lambda get-function --function-name ${FUNCTION_NAME}-${params.ENV} --query 'Configuration.FunctionArn' --output text)"
+                                --targets "Id"="1","Arn"="\\$(aws lambda get-function --function-name ${FUNCTION_NAME}-${params.ENV} --query 'Configuration.FunctionArn' --output text)"
                         """
                     }
                 }
