@@ -2,109 +2,93 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Enter git branch', trim: true)
-        choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Choose deployment environment')
+        choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Choose target AWS environment')
     }
 
     environment {
-        FUNCTION_NAME = 'hey-world-demo'
-        REGION = 'us-east-1'
-        ZIP_FILE = 'lambda_package.zip'
-        ARN_FILE = 'lambda_arn.txt'
-        SONAR_SCANNER_HOME = tool name: 'SonarScanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
-        AWS_CRED_ID = ''
-        EXEC_ROLE_ARN_CRED_ID = ''
-        SCHEDULE_EXPR = ''
-        RULE_NAME = ''
-        STATEMENT_ID = ''
+        FUNCTION_NAME = "hello-world-lambda"
+        REGION = "us-east-1"
+        SONAR_HOST_URL = "https://sonarcloud.io"
     }
 
     stages {
-        stage('Set Environment Config') {
+        stage('Checkout') {
             steps {
-                script {
-                    if (params.ENV == 'dev') {
-                        env.AWS_CRED_ID = 'aws-cred-dev'
-                        env.EXEC_ROLE_ARN_CRED_ID = 'exec-role-arn-dev'
-                        env.SCHEDULE_EXPR = 'rate(15 minutes)'
-                    } else if (params.ENV == 'stage') {
-                        env.AWS_CRED_ID = 'aws-cred-stage'
-                        env.EXEC_ROLE_ARN_CRED_ID = 'exec-role-arn-stage'
-                        env.SCHEDULE_EXPR = 'rate(30 minutes)'
-                    } else if (params.ENV == 'prod') {
-                        env.AWS_CRED_ID = 'aws-cred-prod'
-                        env.EXEC_ROLE_ARN_CRED_ID = 'exec-role-arn-prod'
-                        env.SCHEDULE_EXPR = 'rate(5 minutes)'
-                    }
-                    env.RULE_NAME = "${env.FUNCTION_NAME}-${params.ENV}-schedule"
-                    env.STATEMENT_ID = "${env.FUNCTION_NAME}-${params.ENV}-event"
+                checkout scm
+            }
+        }
+
+        stage('Sonar') {
+            environment {
+                SONAR_TOKEN = credentials('SONAR_TOKEN')
+            }
+            steps {
+                withSonarQubeEnv('SonarQubeServer') {
+                    sh """
+                        sonar-scanner \
+                          -Dsonar.projectKey=${FUNCTION_NAME} \
+                          -Dsonar.sources=. \
+                          -Dsonar.host.url=$SONAR_HOST_URL \
+                          -Dsonar.login=$SONAR_TOKEN
+                    """
                 }
-            }
-        }
-
-        stage('Clone Repository') {
-            steps {
-                checkout([$class: 'GitSCM',
-                    branches: [[name: "*/${params.GIT_BRANCH}"]],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/AngelsTech/aws-lambda-demo.git',
-                        credentialsId: '66142c87-d271-41f4-82d1-cbbee8e844d0'
-                    ]]
-                ])
-            }
-        }
-
-        stage('Prepare') {
-            steps {
-                sh '''
-                    echo "Zipping files"
-                    zip -r $ZIP_FILE test -x "**/.git/*" -x "**/README.md" -x "**/Jenkinsfile"
-                    echo "Listing zip"
-                    unzip -l $ZIP_FILE
-                '''
             }
         }
 
         stage('Deploy Lambda') {
             steps {
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${env.AWS_CRED_ID}", accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'],
-                    [string(credentialsId: "${env.EXEC_ROLE_ARN_CRED_ID}", variable: 'EXEC_ROLE_ARN')]
-                ]) {
-                    sh '''
-                        if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION > /dev/null 2>&1; then
-                            echo "Updating existing Lambda..."
-                            aws lambda update-function-code --function-name $FUNCTION_NAME --zip-file fileb://$ZIP_FILE --region $REGION
-                        else
-                            echo "Creating new Lambda..."
-                            aws lambda create-function --function-name $FUNCTION_NAME --runtime python3.13 --role $EXEC_ROLE_ARN --handler test.devtest.lambda_function.lambda_handler --zip-file fileb://$ZIP_FILE --region $REGION
-                        fi
-                        aws lambda get-function --function-name $FUNCTION_NAME --region $REGION --query 'Configuration.FunctionArn' --output text > $ARN_FILE
-                    '''
+                script {
+                    def awsCred = (params.ENV == 'dev') ? 'aws-cred-dev' :
+                                  (params.ENV == 'stage') ? 'aws-cred-stage' :
+                                  'aws-cred-prod'
+
+                    withAWS(credentials: awsCred, region: env.REGION) {
+                        sh """
+                            zip function.zip lambda_function.py
+                            aws lambda update-function-code \
+                                --function-name ${FUNCTION_NAME}-${params.ENV} \
+                                --zip-file fileb://function.zip \
+                                --region ${REGION}
+                        """
+                    }
                 }
             }
         }
 
         stage('Setup CloudWatch Schedule') {
             steps {
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${env.AWS_CRED_ID}", accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                script {
+                    def awsCred = (params.ENV == 'dev') ? 'aws-cred-dev' :
+                                  (params.ENV == 'stage') ? 'aws-cred-stage' :
+                                  'aws-cred-prod'
 
-                ]) {
-                    sh '''
-                        LAMBDA_ARN=$(cat $ARN_FILE)
-                        echo "Creating/Updating CloudWatch Event Rule..."
-                        aws events put-rule --schedule-expression "$SCHEDULE_EXPR" --name "$RULE_NAME" --region $REGION
-                        echo "Checking Lambda permissions..."
-                        if ! aws lambda get-policy --function-name $FUNCTION_NAME --region $REGION | grep -q "$STATEMENT_ID"; then
-                            echo "Adding permission for CloudWatch Events to invoke Lambda..."
-                            aws lambda add-permission --function-name $FUNCTION_NAME --statement-id $STATEMENT_ID --action lambda:InvokeFunction --principal events.amazonaws.com --region $REGION
-                        fi
-                        echo "Adding Lambda as CloudWatch target..."
-                        aws events put-targets --rule "$RULE_NAME" --targets Id=1,Arn="$LAMBDA_ARN" --region $REGION
-                    '''
+                    withAWS(credentials: awsCred, region: env.REGION) {
+                        sh """
+                            aws events put-rule \
+                                --name ${FUNCTION_NAME}-schedule-${params.ENV} \
+                                --schedule-expression "rate(5 minutes)" \
+                                --region ${REGION}
+
+                            aws lambda add-permission \
+                                --function-name ${FUNCTION_NAME}-${params.ENV} \
+                                --statement-id ${FUNCTION_NAME}-event-${params.ENV} \
+                                --action 'lambda:InvokeFunction' \
+                                --principal events.amazonaws.com \
+                                --source-arn arn:aws:events:${REGION}:$(aws sts get-caller-identity --query Account --output text):rule/${FUNCTION_NAME}-schedule-${params.ENV}
+
+                            aws events put-targets \
+                                --rule ${FUNCTION_NAME}-schedule-${params.ENV} \
+                                --targets "Id"="1","Arn"="$(aws lambda get-function --function-name ${FUNCTION_NAME}-${params.ENV} --query 'Configuration.FunctionArn' --output text)"
+                        """
+                    }
                 }
             }
+        }
+    }
+
+    post {
+        always {
+            echo "Pipeline execution completed for ENV=${params.ENV}"
         }
     }
 }
