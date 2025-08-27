@@ -19,7 +19,7 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                     sh '''
-                      rm -rf aws-lambda
+                      rm -rf aws-lambda-demo
                       BRANCH_NAME=${GIT_BRANCH#origin/}
                       echo "Cloning branch: $BRANCH_NAME"
                       git clone -b $BRANCH_NAME https://${GIT_USER}:${GIT_TOKEN}@github.com/AngelsTech/aws-lambda-demo.git
@@ -33,7 +33,7 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 sh '''
-                  cd aws-lambda-demo/hello-world
+                  cd aws-lambda-demo/test
                   pip install -r requirements.txt -t .
                 '''
             }
@@ -42,7 +42,7 @@ pipeline {
         stage('Package Lambda') {
             steps {
                 sh '''
-                  cd aws-lambda-demo/hello-world
+                  cd aws-lambda-demo/test
                   zip -r9 ../lambda_package.zip .
                 '''
             }
@@ -89,7 +89,7 @@ pipeline {
                         sh '''
                           export AWS_DEFAULT_REGION=$REGION
                           FUNCTION_NAME="${BASE_FUNCTION_NAME}-${ENV}"
-                          cd aws-lambda
+                          cd aws-lambda-demo
 
                           # Check if function exists
                           if ! aws lambda get-function --function-name $FUNCTION_NAME > /dev/null 2>&1; then
