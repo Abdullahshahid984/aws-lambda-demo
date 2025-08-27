@@ -155,7 +155,7 @@ pipeline {
                           # Grant permission for Events to invoke Lambda
                           aws lambda add-permission \
                             --function-name $FUNCTION_NAME \
-                            --statement-id "cw-invoke" \
+                            --statement-id "cw-invoke-${ENV}" \
                             --action 'lambda:InvokeFunction' \
                             --principal events.amazonaws.com \
                             --source-arn $SOURCE_ARN || true
