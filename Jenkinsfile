@@ -33,7 +33,7 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 sh '''
-                  cd aws-lambda/hello-world
+                  cd aws-lambda-demo/hello-world
                   pip install -r requirements.txt -t .
                 '''
             }
@@ -42,7 +42,7 @@ pipeline {
         stage('Package Lambda') {
             steps {
                 sh '''
-                  cd aws-lambda/hello-world
+                  cd aws-lambda-demo/hello-world
                   zip -r9 ../lambda_package.zip .
                 '''
             }
