@@ -23,7 +23,7 @@ pipeline {
                       BRANCH_NAME=${GIT_BRANCH#origin/}
                       echo "Cloning branch: $BRANCH_NAME"
                       git clone -b $BRANCH_NAME https://${GIT_USER}:${GIT_TOKEN}@github.com/AngelsTech/aws-lambda-demo.git
-                      cd aws-lambda
+                      cd aws-lambda-demo
                       ls -la
                     '''
                 }
