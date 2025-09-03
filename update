@@ -1,0 +1,43 @@
+```groovy
+stage('Deploy to AWS Lambda') {
+    steps {
+        script {
+            def credId = '' // Note: Fixed typo from 'credsId' to match below ('credId')
+            def lambdaRole = ''
+            def functionName = "${env.FUNCTION_NAME}-${params.ENV}"
+
+            if (params.ENV == 'devtest') {
+                credId = 'aws-nonprod-accesskey'
+                lambdaRole = 'arn:aws:iam:297322678787:role/ops-api-full-access'
+            } else if (params.ENV == 'stage') {
+                credId = 'aws-nonprod-accesskey'
+                lambdaRole = 'arn:aws:iam:297322678787:role/ops-api-lambda-nonprod-role' // Fixed typo
+            } else if (params.ENV == 'prod') {
+                credId = 'aws-prod-accesskey'
+                lambdaRole = 'arn:aws:iam:313923649386:role/ops-api-lambda-prod-role' // Fixed typo
+            }
+
+            withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: credId, accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+                sh """
+                    export AWS_DEFAULT_REGION=\$REGION
+                    # Check if function exists, create if it doesn't
+                    if ! aws lambda get-function --function-name '${functionName}' > /dev/null 2>&1; then
+                        echo "Creating new lambda function: ${functionName}"
+                        aws lambda create-function \\
+                            --function-name '${functionName}' \\
+                            --runtime python3.13 \\
+                            --role '${lambdaRole}' \\
+                            --handler lambda_handler.lambda_handler \\
+                            --zip-file fileb://lambda_package.zip
+                    else
+                        echo "Function ${functionName} exists, updating code."
+                        aws lambda update-function-code \\
+                            --function-name '${functionName}' \\
+                            --zip-file fileb://lambda_package.zip
+                    fi
+                """
+            }
+        }
+    }
+}
+```
