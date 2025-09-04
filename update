@@ -1,4 +1,13 @@
 ```groovy
+environment {
+        FUNCTION_NAME = 'hey-world-demo'
+        REGION = 'us-east-1'
+        SONAR_PROJECT_KEY = "aws-lambda"
+        SONAR_ORG = "your-org"
+        ZIP_FILE = "lambda_package.zip"
+    }
+
+
 stage('Deploy to AWS Lambda') {
     steps {
         script {
@@ -8,13 +17,13 @@ stage('Deploy to AWS Lambda') {
 
             if (params.ENV == 'devtest') {
                 credId = 'aws-nonprod-accesskey'
-                lambdaRole = 'arn:aws:iam:297322678787:role/ops-api-full-access'
+                lambdaRole = 'arn:aws:iam:297322678787:role/full-access'
             } else if (params.ENV == 'stage') {
                 credId = 'aws-nonprod-accesskey'
-                lambdaRole = 'arn:aws:iam:297322678787:role/ops-api-lambda-nonprod-role' // Fixed typo
+                lambdaRole = 'arn:aws:iam:297322678787:role/lambda-nonprod-role' // Fixed typo
             } else if (params.ENV == 'prod') {
                 credId = 'aws-prod-accesskey'
-                lambdaRole = 'arn:aws:iam:313923649386:role/ops-api-lambda-prod-role' // Fixed typo
+                lambdaRole = 'arn:aws:iam:313923649386:role/lambda-prod-role' // Fixed typo
             }
 
             withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: credId, accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
@@ -79,7 +88,7 @@ stage('Setup CloudWatch Schedule') {
                         SOURCE_ARN=$(aws events describe-rule --name $RULE_NAME --query 'Arn' --output text)
 
                         # Check if permission already exists
-                        if ! aws lambda get-policy --function-name $FUNCTION_NAME | grep -q $STATEMENT_ID; then
+                        if ! aws lambda get-policy --function-name '${functionName}' | grep -q $STATEMENT_ID; then
                             echo "Adding new permission: $STATEMENT_ID"
                             aws lambda add-permission \
                                 --function-name '${functionName}'\
