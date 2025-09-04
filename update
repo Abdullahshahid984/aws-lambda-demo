@@ -2,8 +2,6 @@
 environment {
         FUNCTION_NAME = 'hey-world-demo'
         REGION = 'us-east-1'
-        SONAR_PROJECT_KEY = "aws-lambda"
-        SONAR_ORG = "your-org"
         ZIP_FILE = "lambda_package.zip"
     }
 
