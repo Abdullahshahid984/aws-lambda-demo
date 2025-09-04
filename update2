@@ -1,0 +1,56 @@
+parameters {
+    string(defaultValue: 'develop', description: 'Select git branch', name: 'GIT_BRANCH', trim: true)
+    choice(name: 'ENV', choices: ['devtest', 'stage', 'prod'], description: 'Choose deployment environment')
+}
+
+And you also have an environment block:
+
+environment {
+    FUNCTION_NAME = 'lambda-function'
+    REGION = 'us-east-1'
+    ZIP_FILE = 'lambda_package.zip'
+    ARN_FILE = 'lambda_arn.txt'
+}
+
+
+⸻
+
+Where to define ENV
+
+You should not put ENV in the environment block, because you already defined it as a parameter.
+ • parameters { choice(name: 'ENV', ...) } makes params.ENV available in the pipeline.
+ • Inside stages or scripts, you reference it as params.ENV, not as env.ENV.
+
+If you were to also put ENV in the environment {} block, it could cause conflicts or confusion, since Jenkins would see two different definitions (one as a parameter, one as an environment variable).
+
+⸻
+
+Correct pattern
+
+Keep it like this:
+
+parameters {
+    string(defaultValue: 'develop', description: 'Select git branch', name: 'GIT_BRANCH', trim: true)
+    choice(name: 'ENV', choices: ['devtest', 'stage', 'prod'], description: 'Choose deployment environment')
+}
+
+environment {
+    FUNCTION_NAME = 'lambda-function'
+    REGION = 'us-east-1'
+    ZIP_FILE = 'lambda_package.zip'
+    ARN_FILE = 'lambda_arn.txt'
+}
+
+Then, anywhere in the pipeline you need the environment, use:
+
+params.ENV
+
+For example:
+
+def functionName = "${env.FUNCTION_NAME}-${params.ENV}"
+
+
+Key takeaway
+ • Define ENV once in parameters.
+ • Do not duplicate it inside environment {}.
+ • Always access it via params.ENV.
