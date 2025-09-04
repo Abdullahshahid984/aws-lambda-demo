@@ -40,4 +40,61 @@ stage('Deploy to AWS Lambda') {
         }
     }
 }
-```
+stage('Setup CloudWatch Schedule') {
+            steps {
+                script {
+                    def credsId = ''
+
+                    if (params.ENV == 'dev') {
+                        credsId = 'aws-cred-dev'
+                    } else if (params.ENV == 'stage') {
+                        credsId = 'aws-cred-stage'
+                    } else if (params.ENV == 'prod') {
+                        credsId = 'aws-cred-prod'
+                    }
+
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: credId, accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+                        sh '''
+                        export AWS_DEFAULT_REGION=$REGION
+                        FUNCTION_NAME="{functionName}"
+                        RULE_NAME="hello-world-schedule-${ENV}"
+                        SCHEDULE="rate(5 minutes)"
+                        STATEMENT_ID="cw-invoke-${ENV}"
+
+                        # Create or update CloudWatch rule
+                        aws events put-rule \
+                            --name $RULE_NAME \
+                            --schedule-expression "$SCHEDULE" \
+                            --state ENABLED
+
+                        # Resolve Lambda ARN
+                        FUNCTION_ARN=$(aws lambda get-function --function-name '${functionName}' --query 'Configuration.FunctionArn' --output text)
+
+                        # Add Lambda as target of the rule
+                        aws events put-targets \
+                            --rule $RULE_NAME \
+                            --targets "Id"="1","Arn"=$FUNCTION_ARN
+
+                        # Resolve Rule ARN
+                        SOURCE_ARN=$(aws events describe-rule --name $RULE_NAME --query 'Arn' --output text)
+
+                        # Check if permission already exists
+                        if ! aws lambda get-policy --function-name $FUNCTION_NAME | grep -q $STATEMENT_ID; then
+                            echo "Adding new permission: $STATEMENT_ID"
+                            aws lambda add-permission \
+                                --function-name '${functionName}'\
+                                --statement-id $STATEMENT_ID \
+                                --action 'lambda:InvokeFunction' \
+                                --principal events.amazonaws.com \
+                                --source-arn $SOURCE_ARN
+                        else
+                            echo "Permission $STATEMENT_ID already exists, skipping..."
+                        fi
+                        '''
+                    }
+                }
+            }
+        }
+
+    }
+}
