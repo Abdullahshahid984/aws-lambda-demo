@@ -2,7 +2,7 @@
 def config = [
     layers: [
         core: [zip: 'core.zip', exclude: "'**/numpy/**' '**/pandas/**'"],
-        uscls: [zip: 'uscls.zip', exclude: "'**/six/**' '**/urllib3/**' '**/numpy/**' '**/pandas/**'"]
+        uba: [zip: 'uscls.zip', exclude: "'**/six/**' '**/urllib3/**' '**/numpy/**' '**/pandas/**'"]
     ],
     baseLayer: 'arn:aws:lambda:us-east-1:336992948345:layer:AMSSDXPands-Python39:29'
 ]
