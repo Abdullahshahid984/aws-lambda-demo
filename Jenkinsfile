@@ -26,7 +26,7 @@ def baseLayers = ['arn:aws:lambda:us-east-1:336992948345:layer:AMSSDXPands-Pytho
 
 pipeline {
     agent {
-        label 'any'
+        label 'your-agent-label'
     }
     
     parameters {
@@ -49,8 +49,8 @@ pipeline {
                 checkout([$class: 'GitSCM',
                     branches: [[name: "${params.GIT_BRANCH}"]],
                     userRemoteConfigs: [[
-                        url: 'https://github.com/AngelsTech/aws-lambda-demo.git',
-                        credentialsId: '66142c87-d271-41f4-82d1-cbbee8e844d0'
+                        url: 'https://your-git-repo-url',
+                        credentialsId: 'your-git-credentials'
                     ]]
                 ])
             }
@@ -59,25 +59,42 @@ pipeline {
         stage('Install Requirements') {
             steps {
                 script {
-                    sh '''
-                  echo "Installing Python dependencies into test/devtest..."
-                  pip install -r test/devtest/requirements.txt -t test/devtest
-                '''
+                    ['core', 'uscls'].each { layer ->
+                        dir(env.WORKSPACE) {
+                            sh """
+                                echo "INFO: Installing Python dependencies for ${layer} layer..."
+                                python3.9 -m pip install --upgrade pip
+                                mkdir -p ./${layer}
+                                if [ -f "requirements-${layer}.txt" ]; then
+                                    pip3.9 install -r requirements-${layer}.txt -t ./${layer} --no-deps
+                                else
+                                    echo "WARNING: requirements-${layer}.txt not found, skipping..."
+                                fi
+                            """
+                        }
+                    }
+                }
             }
         }
         
-        stage('Package Lambda') {
+        stage('Package Layers') {
             steps {
-                sh '''
-                    echo "Zipping all required files for Lambda deployment..."
-                    zip -r $ZIP_FILE test \
-                        -x "**/.git/*" \
-                        -x "**/README.md" \
-                        -x "**/Jenkinsfile"
-
-                    echo "Listing contents of the zip file to verify structure:"
-                    unzip -l $ZIP_FILE
-                '''
+                script {
+                    reqMap.each { layer, config ->
+                        if (layer != 'all') {
+                            sh """
+                                echo "INFO: Packaging ${layer} layer to ${config.zip}..."
+                                if [ -d "./${layer}" ] && [ "\$(ls -A ./${layer})" ]; then
+                                    zip -r ${config.zip} ./${layer} -x ${config.exclude}
+                                    echo "INFO: Layer ${config.zip} created successfully"
+                                else
+                                    echo "WARNING: ${layer} directory is empty, creating empty zip..."
+                                    touch ${config.zip}
+                                fi
+                            """
+                        }
+                    }
+                }
             }
         }
         
