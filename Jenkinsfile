@@ -5,7 +5,7 @@ def config = [
     ],
     baseLayer: 'arn:aws:lambda:us-east-1:336992948345:layer:AMSSDXPands-Python39:29'
 ]
-
+def layerArns = [:]
 // IAM Role configuration
 def roleConfig = [
     devtest: 'arn:aws:iam::YOUR_ACCOUNT_ID:role/lambda-execution-role-dev',
