@@ -169,67 +169,80 @@ pipeline {
                 }
             }
         }
-       
+
+
+        
         stage('Create or Update Lambda') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-                    script {
-                        def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
-                        def allLayers = [layerArns.core, layerArns.uscls, config.baseLayer]
-                       
-                        // Check if function exists
-                        def functionExists = sh(
-                            script: """
-                                aws lambda get-function \
-                                    --function-name "${FUNCTION_NAME}" \
-                                    --region ${env.REGION} \
-                                    --query 'Configuration.FunctionName' \
-                                    --output text 2>/dev/null || echo "NOT_FOUND"
-                            """,
-                            returnStdout: true
-                        ).trim()
-                       
-                        if (functionExists == "NOT_FOUND") {
-                            echo "Creating new Lambda function: ${FUNCTION_NAME}"
-                            sh """
-                                aws lambda create-function \
-                                    --function-name "${FUNCTION_NAME}" \
-                                    --runtime python3.9 \
-                                    --role "${env.LAMBDA_ROLE_ARN}" \
-                                    --handler ${env.LAMBDA_HANDLER} \
-                                    --zip-file fileb://${env.ZIP_FILE} \
-                                    --layers ${allLayers.join(' ')} \
-                                    --region ${env.REGION}
-                            """
-                        } else {
-                            echo "Updating existing Lambda function: ${FUNCTION_NAME}"
-                            // Update configuration with IAM role
-                            sh """
-                                aws lambda update-function-configuration \
-                                    --function-name "${FUNCTION_NAME}" \
-                                    --role "${env.LAMBDA_ROLE_ARN}" \
-                                    --layers ${allLayers.join(' ')} \
-                                    --region ${env.REGION}
-                            """
-                           
-                            // Update code
-                            sh """
-                                aws lambda update-function-code \
-                                    --function-name "${FUNCTION_NAME}" \
-                                    --zip-file fileb://${env.ZIP_FILE} \
-                                    --region ${env.REGION}
-                            """
-                        }
-                    }
+          steps {
+            withCredentials([[
+              $class: 'AmazonWebServicesCredentialsBinding',
+              credentialsId: 'aws-credentials',
+              accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+              secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+           ]]) {
+              script {
+                 def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
+               
+                // Get fresh layer versions to ensure we have the latest
+                 def coreLayerArn = sh(
+                    script: """
+                        aws lambda list-layer-versions \
+                            --layer-name core \
+                            --region ${env.REGION} \
+                            --query 'LayerVersions[0].LayerVersionArn' \
+                            --output text
+                    """,
+                    returnStdout: true
+                ).trim()
+               
+                def abcLayerArn = sh(
+                    script: """
+                        aws lambda list-layer-versions \
+                            --layer-name abc \
+                            --region ${env.REGION} \
+                            --query 'LayerVersions[0].LayerVersionArn' \
+                            --output text
+                    """,
+                    returnStdout: true
+                ).trim()
+               
+                def functionExists = sh(
+                    script: """
+                        aws lambda get-function \
+                            --function-name "${FUNCTION_NAME}" \
+                            --region ${env.REGION} \
+                            --query 'Configuration.FunctionName' \
+                            --output text 2>/dev/null || echo "NOT_FOUND"
+                    """,
+                    returnStdout: true
+                ).trim()
+               
+                if (functionExists == "NOT_FOUND") {
+                    echo "Creating new Lambda function: ${FUNCTION_NAME}"
+                    sh """
+                        aws lambda create-function \
+                            --function-name "${FUNCTION_NAME}" \
+                            --runtime python3.9 \
+                            --role "${env.LAMBDA_ROLE_ARN}" \
+                            --handler lambda_handler.lambda_handler \
+                            --zip-file fileb://${env.ZIP_FILE} \
+                            --layers ${coreLayerArn} ${abcLayerArn} ${config.baseLayer} \
+                            --region ${env.REGION}
+                    """
+                } else {
+                    echo "Updating existing Lambda function: ${FUNCTION_NAME}"
+                    sh """
+                        aws lambda update-function-configuration \
+                            --function-name "${FUNCTION_NAME}" \
+                            --role "${env.LAMBDA_ROLE_ARN}" \
+                            --layers ${coreLayerArn} ${abcLayerArn} ${config.baseLayer} \
+                            --region ${env.REGION}
+                    """
+                      }
+                  }
                 }
             }
         }
-       
         stage('Verify Deployment') {
             steps {
                 script {
