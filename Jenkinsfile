@@ -116,7 +116,17 @@ pipeline {
                 }
             }
         }
-       
+        stage('Package Lambda Code') {
+           steps {
+             dir(env.WORKSPACE) {
+              sh """
+                echo "Packaging Lambda function code..."
+                zip -r ${env.ZIP_FILE} lambda_function.py *.py src/ -x "*/__pycache__/*" "*.pyc"
+                // zip -r ${env.ZIP_FILE} . -x "*.git*" "requirements*.txt" "*/__pycache__/*" "*.pyc"
+            """
+           }
+         }
+       }
         stage('Publish Layers') {
             steps {
                 withCredentials([[
