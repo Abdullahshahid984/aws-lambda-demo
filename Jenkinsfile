@@ -29,6 +29,8 @@ pipeline {
         ZIP_FILE = 'lambda_package.zip'
         AWS_ACCOUNT_ID = 'your-aws-account-id'
         LAMBDA_ROLE_ARN = "${roleConfig[params.ENV]}"
+        LAMBDA_HANDLER = 'lambda_handler.lambda_handler'  // ← ADD THIS
+}
     }
    
     stages {
@@ -199,7 +201,7 @@ pipeline {
                                     --function-name "${FUNCTION_NAME}" \
                                     --runtime python3.9 \
                                     --role "${env.LAMBDA_ROLE_ARN}" \
-                                    --handler lambda_function.lambda_handler \
+                                    --handler ${env.LAMBDA_HANDLER} \
                                     --zip-file fileb://${env.ZIP_FILE} \
                                     --layers ${allLayers.join(' ')} \
                                     --region ${env.REGION}
