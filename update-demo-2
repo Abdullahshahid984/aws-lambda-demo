@@ -1,212 +1,82 @@
+
+## **Clean Configuration Approach:**
+
 ```groovy
 def config = [
     layers: [
         core: [zip: 'core.zip', exclude: "'**/numpy/**' '**/pandas/**'"],
-        uba: [zip: 'uscls.zip', exclude: "'**/six/**' '**/urllib3/**' '**/numpy/**' '**/pandas/**'"]
+        abc: [zip: 'abc.zip', exclude: "'**/six/**' '**/urllib3/**' '**/numpy/**' '**/pandas/**'"]
     ],
-    baseLayer: 'arn:aws:lambda:us-east-1:336992948345:layer:AMSSDXPands-Python39:29'
+    awsLayers: [
+        'arn:aws:lambda:us-east-1:336992948345:layer:AMSSDXPands-Python39:29',
+        'arn:aws:lambda:us-east-1:336992948345:layer:AWSSDKPandas-Python39:29'  // ← ADD THIS
+    ]
 ]
+def layerArns = [:]
+```
 
-def roleConfig = [
-    devtest: 'arn:aws:iam::YOUR_ACCOUNT_ID:role/lambda-execution-role-dev',
-    stage: 'arn:aws:iam::YOUR_ACCOUNT_ID:role/lambda-execution-role-stage',
-    prod: 'arn:aws:iam::YOUR_ACCOUNT_ID:role/lambda-execution-role-prod'
-]
+## **Updated Deployment Stage:**
 
-pipeline {
-    agent {
-        label 'your-agent-label'
-    }
-   
-    parameters {
-        string defaultValue: 'develop', description: 'Select git branch', name: 'GIT_BRANCH', trim: true
-        choice(name: 'ENV', choices: ['devtest', 'stage', 'prod'], description: 'Choose deployment environment')
-    }
-   
-    environment {
-        BASE_FUNCTION_NAME = 'lambda-function'
-        REGION = 'us-east-1'
-        AWS_ACCOUNT_ID = 'your-aws-account-id'
-        LAMBDA_ROLE_ARN = "${roleConfig[params.ENV]}"
-    }
-   
-    stages {
-        // Stage 1: Source Code
-        stage('Clone Repository') {
-            steps {
-                cleanWs()
-                checkout([$class: 'GitSCM',
-                    branches: [[name: "${params.GIT_BRANCH}"]],
-                    userRemoteConfigs: [[
-                        url: 'https://your-git-repo-url',
-                        credentialsId: 'your-git-credentials'
-                    ]]
-                ])
-            }
-        }
-       
-        // Stage 2: Dependencies & Packaging
-        stage('Build Layers') {
-            steps {
-                script {
-                    config.layers.each { layerName, layerConfig ->
-                        dir(env.WORKSPACE) {
-                            sh """
-                                echo "Building ${layerName} layer..."
-                                mkdir -p ./${layerName}/python
-                                if [ -f "requirements-${layerName}.txt" ]; then
-                                    pip3.9 install -r requirements-${layerName}.txt -t ./${layerName}/python --no-deps
-                                fi
-                                cd ${layerName}
-                                zip -r ../${layerConfig.zip} . -x ${layerConfig.exclude}
-                                cd ..
-                            """
-                        }
-                    }
+```groovy
+stage('Create or Update Lambda') {
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-credentials',
+            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
+            script {
+                def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
+               
+                // Get your custom layer versions
+                def coreLayerArn = sh(script: "aws lambda list-layer-versions --layer-name core --region ${env.REGION} --query 'LayerVersions[0].LayerVersionArn' --output text", returnStdout: true).trim()
+                def abcLayerArn = sh(script: "aws lambda list-layer-versions --layer-name abc --region ${env.REGION} --query 'LayerVersions[0].LayerVersionArn' --output text", returnStdout: true).trim()
+               
+                // Combine all layers: custom + AWS managed layers
+                def allLayers = [coreLayerArn, abcLayerArn] + config.awsLayers
+               
+                def functionExists = sh(script: "aws lambda get-function --function-name '${FUNCTION_NAME}' --region ${env.REGION} --query 'Configuration.FunctionName' --output text 2>/dev/null || echo 'NOT_FOUND'", returnStdout: true).trim()
+               
+                if (functionExists == "NOT_FOUND") {
+                    echo "Creating new Lambda function: ${FUNCTION_NAME}"
+                    sh """
+                        aws lambda create-function \
+                            --function-name "${FUNCTION_NAME}" \
+                            --runtime python3.9 \
+                            --role "${env.LAMBDA_ROLE_ARN}" \
+                            --handler lambda_handler.lambda_handler \
+                            --zip-file fileb://${env.ZIP_FILE} \
+                            --layers ${allLayers.collect{'"' + it + '"'}.join(' ')} \
+                            --region ${env.REGION}
+                    """
+                } else {
+                    echo "Updating existing Lambda function: ${FUNCTION_NAME}"
+                    sh """
+                        aws lambda update-function-configuration \
+                            --function-name "${FUNCTION_NAME}" \
+                            --role "${env.LAMBDA_ROLE_ARN}" \
+                            --layers ${allLayers.collect{'"' + it + '"'}.join(' ')} \
+                            --region ${env.REGION}
+                    """
                 }
             }
-        }
-       
-        // Stage 3: AWS Deployment
-        stage('Deploy to AWS') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-                    script {
-                        def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
-                       
-                        // Publish layers
-                        def layerArns = [:]
-                        config.layers.each { layerName, layerConfig ->
-                            sh """
-                                aws lambda publish-layer-version \
-                                    --layer-name ${layerName} \
-                                    --zip-file fileb://${layerConfig.zip} \
-                                    --compatible-runtimes python3.9 \
-                                    --region ${env.REGION}
-                            """
-                           
-                            def layerArn = sh(
-                                script: """
-                                    aws lambda list-layer-versions \
-                                        --layer-name ${layerName} \
-                                        --region ${env.REGION} \
-                                        --query 'LayerVersions[0].LayerVersionArn' \
-                                        --output text
-                                """,
-                                returnStdout: true
-                            ).trim()
-                            layers[layerName] = layerArn
-                        }
-                       
-                        // Create or update Lambda function
-                        def allLayers = [layerArns.core, layerArns.uscls, config.baseLayer]
-                        def functionExists = sh(
-                            script: """
-                                aws lambda get-function \
-                                    --function-name "${FUNCTION_NAME}" \
-                                    --region ${env.REGION} \
-                                    --query 'Configuration.FunctionName' \
-                                    --output text 2>/dev/null || echo "NOT_FOUND"
-                            """,
-                            returnStdout: true
-                        ).trim()
-                       
-                        if (functionExists == "NOT_FOUND") {
-                            sh """
-                                aws lambda create-function \
-                                    --function-name "${FUNCTION_NAME}" \
-                                    --runtime python3.9 \
-                                    --role "${env.LAMBDA_ROLE_ARN}" \
-                                    --handler lambda_function.lambda_handler \
-                                    --zip-file fileb://lambda_function.zip \
-                                    --layers ${allLayers.join(' ')} \
-                                    --region ${env.REGION}
-                            """
-                        } else {
-                            sh """
-                                aws lambda update-function-configuration \
-                                    --function-name "${FUNCTION_NAME}" \
-                                    --role "${env.LAMBDA_ROLE_ARN}" \
-                                    --layers ${allLayers.join(' ')} \
-                                    --region ${env.REGION}
-                            """
-                        }
-                    }
-                }
-            }
-        }
-       
-        // Stage 4: CloudWatch Setup (Essential)
-        stage('Setup CloudWatch Schedule') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-                    script {
-                        def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
-                        def ruleName = "schedule-${FUNCTION_NAME}"
-                       
-                        // Create CloudWatch rule
-                        sh """
-                            aws events put-rule \
-                                --name ${ruleName} \
-                                --schedule-expression "rate(5 minutes)" \
-                                --state ENABLED \
-                                --region ${env.REGION}
-                        """
-                       
-                        // Add Lambda as target
-                        sh """
-                            aws events put-targets \
-                                --rule ${ruleName} \
-                                --targets "Id"="1","Arn"="arn:aws:lambda:${env.REGION}:${env.AWS_ACCOUNT_ID}:function:${FUNCTION_NAME}" \
-                                --region ${env.REGION}
-                        """
-                       
-                        // Add permission for CloudWatch
-                        sh """
-                            aws lambda add-permission \
-                                --function-name "${FUNCTION_NAME}" \
-                                --statement-id "cloudwatch-${FUNCTION_NAME}" \
-                                --action "lambda:InvokeFunction" \
-                                --principal "events.amazonaws.com" \
-                                --source-arn "arn:aws:events:${env.REGION}:${env.AWS_ACCOUNT_ID}:rule/${ruleName}" \
-                                --region ${env.REGION} 2>/dev/null || echo "Permission exists"
-                        """
-                    }
-                }
-            }
-        }
-       
-        // Stage 5: Final Verification
-        stage('Verify Deployment') {
-            steps {
-                script {
-                    def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
-                    echo "Deployment completed for ${FUNCTION_NAME}"
-                    echo "CloudWatch schedule configured: rate(5 minutes)"
-                }
-            }
-        }
-    }
-   
-    post {
-        always {
-            cleanWs()
-        }
-        success {
-            echo "Lambda deployment with CloudWatch completed successfully"
-        }
-        failure {
-            echo "Deployment failed - check logs for details"
         }
     }
 }
+```
+
+## **Alternative: Simple Additive Approach**
+
+If you prefer to keep your current structure, just add the pandas layer to the existing command:
+
+```groovy
+def pandasLayerArn = 'arn:aws:lambda:us-east-1:336992948345:layer:AWSSDKPandas-Python39:29'
+
+sh """
+    aws lambda update-function-configuration \
+        --function-name "${FUNCTION_NAME}" \
+        --role "${env.LAMBDA_ROLE_ARN}" \
+        --layers "${coreLayerArn}" "${abcLayerArn}" "${config.baseLayer}" "${pandasLayerArn}" \
+        --region ${env.REGION}
+"""
