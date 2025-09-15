@@ -1,0 +1,140 @@
+stage('Publish Layers') {
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-credentials',
+            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
+            script {
+                // REMOVE THIS LINE: def layerArns = [:]
+                // Use the global layerArns instead
+               
+                config.layers.each { layerName, layerConfig ->
+                    dir(env.WORKSPACE) {
+                        sh """
+                            aws lambda publish-layer-version \
+                                --layer-name ${layerName} \
+                                --zip-file fileb://${layerConfig.zip} \
+                                --compatible-runtimes python3.9 \
+                                --region ${env.REGION}
+                        """
+                       
+                        def layerArn = sh(
+                            script: """
+                                aws lambda list-layer-versions \
+                                    --layer-name ${layerName} \
+                                    --region ${env.REGION} \
+                                    --query 'LayerVersions[0].LayerVersionArn' \
+                                    --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+                       
+                        layerArns[layerName] = layerArn
+                        echo "Published ${layerName}: ${layerArn}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+stage('Update Lambda with Latest Layers') {
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-credentials',
+            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
+            script {
+                def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
+               
+                // Get latest versions of all published layers
+                def coreLayerArn = sh(
+                    script: """
+                        aws lambda list-layer-versions \
+                            --layer-name core \
+                            --region ${env.REGION} \
+                            --query 'LayerVersions[0].LayerVersionArn' \
+                            --output text
+                    """,
+                    returnStdout: true
+                ).trim()
+               
+                def abcLayerArn = sh(
+                    script: """
+                        aws lambda list-layer-versions \
+                            --layer-name abc \
+                            --region ${env.REGION} \
+                            --query 'LayerVersions[0].LayerVersionArn' \
+                            --output text
+                    """,
+                    returnStdout: true
+                ).trim()
+               
+                // Store in global variable for use in next stage
+                layerArns['core'] = coreLayerArn
+                layerArns['abc'] = abcLayerArn
+               
+                echo "Latest layer versions:"
+                echo "Core: ${coreLayerArn}"
+                echo "ABC: ${abcLayerArn}"
+            }
+        }
+    }
+stage('Create or Update Lambda') {
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-credentials',
+            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
+            script {
+                def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
+               
+                // Use the layer ARNs from the previous stage
+                def allLayers = [layerArns['core'], layerArns['abc'], config.baseLayer]
+               
+                def functionExists = sh(
+                    script: """
+                        aws lambda get-function \
+                            --function-name "${FUNCTION_NAME}" \
+                            --region ${env.REGION} \
+                            --query 'Configuration.FunctionName' \
+                            --output text 2>/dev/null || echo "NOT_FOUND"
+                    """,
+                    returnStdout: true
+                ).trim()
+               
+                if (functionExists == "NOT_FOUND") {
+                    echo "Creating new Lambda function: ${FUNCTION_NAME}"
+                    sh """
+                        aws lambda create-function \
+                            --function-name "${FUNCTION_NAME}" \
+                            --runtime python3.9 \
+                            --role "${env.LAMBDA_ROLE_ARN}" \
+                            --handler ${env.LAMBDA_HANDLER} \
+                            --zip-file fileb://${env.ZIP_FILE} \
+                            --layers ${allLayers.collect{'"' + it + '"'}.join(' ')} \
+                            --region ${env.REGION}
+                    """
+                } else {
+                    echo "Updating existing Lambda function: ${FUNCTION_NAME}"
+                    sh """
+                        aws lambda update-function-configuration \
+                            --function-name "${FUNCTION_NAME}" \
+                            --role "${env.LAMBDA_ROLE_ARN}" \
+                            --layers ${allLayers.collect{'"' + it + '"'}.join(' ')} \
+                            --region ${env.REGION}
+                    """
+                }
+            }
+        }
+    }
+}}
+
