@@ -79,52 +79,49 @@ environment {
 }
 
 // Add this stage after 'Test Lambda Function'
-stage('Setup CloudWatch Schedule') {
+stage("Setup CloudWatch Schedule") {
     steps {
-        withCredentials([
-            [
-                $class: 'AmazonWebServicesCredentialsBinding',
-                credentialsId: 'aws-credentials',  // Use your actual credentials ID
-                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-            ]
-        ]) {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-nonprod-accesskey',
+            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
             script {
                 def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
-                def ruleName = "${FUNCTION_NAME}-schedule"
+                def RULE_NAME = "${FUNCTION_NAME}-schedule"  // Dynamic rule name
+                def SCHEDULE_EXPRESSION = "rate(15 minutes)"
                
-                echo "Setting up CloudWatch schedule for ${FUNCTION_NAME} every ${params.SCHEDULE_MINUTES} minutes"
+                echo "Creating CloudWatch Events rule: ${RULE_NAME}"
                
-                // Create or update CloudWatch rule
                 sh """
+                    # Read Lambda ARN from file (as in your working version)
+                    LAMBDA_ARN=\$(cat ${env.ARN_FILE})
+                   
+                    # Create CloudWatch rule
                     aws events put-rule \
-                    --name ${ruleName} \
-                    --schedule-expression "rate(${params.SCHEDULE_MINUTES} minutes)" \
-                    --state ENABLED \
-                    --region ${env.REGION} \
-                    --description "Schedule for ${FUNCTION_NAME} Lambda function"
-                """
-               
-                // Add lambda as target
-                sh """
-                    aws events put-targets \
-                    --rule ${ruleName} \
-                    --targets Id="1",Arn="arn:aws:lambda:${env.REGION}:${env.AWS_ACCOUNT_ID}:function:${FUNCTION_NAME}" \
-                    --region ${env.REGION}
-                """
-               
-                // Add permission for CloudWatch (idempotent)
-                sh """
+                        --schedule-expression "${SCHEDULE_EXPRESSION}" \
+                        --name "${RULE_NAME}" \
+                        --region ${env.REGION} \
+                        --description "Schedule for ${FUNCTION_NAME} in ${params.ENV} environment"
+                   
+                    # Add permission for CloudWatch to invoke Lambda
                     aws lambda add-permission \
-                    --function-name "${FUNCTION_NAME}" \
-                    --statement-id "cloudwatch-${ruleName}" \
-                    --action "lambda:InvokeFunction" \
-                    --principal "events.amazonaws.com" \
-                    --source-arn "arn:aws:events:${env.REGION}:${env.AWS_ACCOUNT_ID}:rule/${ruleName}" \
-                    --region ${env.REGION} 2>/dev/null || echo "Permission already exists"
+                        --function-name ${FUNCTION_NAME} \
+                        --statement-id "cloudwatch-${RULE_NAME}" \
+                        --action lambda:InvokeFunction \
+                        --principal events.amazonaws.com \
+                        --source-arn "arn:aws:events:${env.REGION}:\$(echo \$LAMBDA_ARN | cut -d: -f5):rule/${RULE_NAME}" \
+                        --region ${env.REGION} 2>/dev/null || echo "Permission already exists"
+                   
+                    # Create target for CloudWatch Events
+                    aws events put-targets \
+                        --rule "${RULE_NAME}" \
+                        --targets Id="1",Arn="\$LAMBDA_ARN" \
+                        --region ${env.REGION}
                 """
                
-                echo "CloudWatch schedule configured successfully: ${ruleName}"
+                echo "CloudWatch schedule configured: ${RULE_NAME} for ${FUNCTION_NAME}"
             }
         }
     }
