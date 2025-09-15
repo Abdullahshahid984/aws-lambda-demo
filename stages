@@ -1,0 +1,42 @@
+stage('Install Requirements') {
+    steps {
+        script {
+            reqMap.each { layerName, layerConfig ->
+                if (layerName != 'all') {
+                    dir(env.WORKSPACE) {
+                        sh """
+                            echo "Installing dependencies for ${layerName} layer with AWS-recommended structure..."
+                            mkdir -p python/lib/python3.9
+                            if [ -f "requirements-${layerName}.txt" ]; then
+                                pip3.9 install -r requirements-${layerName}.txt -t python/lib/python3.9 --no-deps
+                            else
+                                echo "requirements-${layerName}.txt not found, skipping..."
+                            fi
+                        """
+                    }
+                }
+            }
+        }
+    }
+}
+stage('Package Layers') {
+    steps {
+        script {
+            reqMap.each { layerName, layerConfig ->
+                if (layerName != 'all') {
+                    dir(env.WORKSPACE) {
+                        sh """
+                            echo "Packaging ${layerName} layer with AWS structure..."
+                            zip -r ${layerConfig.zip} python -x ${layerConfig.exclude}
+                            # Clean up the python directory for next layer
+                            rm -rf python
+                        """
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
