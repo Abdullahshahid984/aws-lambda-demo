@@ -38,5 +38,26 @@ stage('Package Layers') {
     }
 }
 
-
+stage('Publish Layers') {
+    steps {
+        script {
+            reqMap.each { layerName, layerConfig ->
+                if (layerName != 'all') {
+                    sh """
+                        aws lambda publish-layer-version \
+                            --layer-name ${layerName} \
+                            --zip-file fileb://${layerConfig.zip} \
+                            --compatible-runtimes python3.9 \
+                            --region ${env.REGION} \
+                            --query 'LayerVersionArn' \
+                            --output text > ${layerName}_arn.txt
+                    """
+                   
+                    def layerArn = readFile("${layerName}_arn.txt").trim()
+                    layerArns[layerName] = layerArn
+                }
+            }
+        }
+    }
+}
 
