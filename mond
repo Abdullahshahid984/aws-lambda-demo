@@ -94,3 +94,61 @@ stage('Deploy Lambda Function') {
             }
         }
     }
+stage('Setup CloudWatch Schedule') {
+    steps {
+        withCredentials([[ 
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-credentials',
+            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
+            script {
+                def FUNCTION_NAME = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
+                def RULE_NAME = "${FUNCTION_NAME}-schedule"
+
+                // Fetch AWS account ID dynamically
+                def awsAccountId = sh(
+                    script: """
+                        aws sts get-caller-identity \
+                            --query 'Account' \
+                            --output text \
+                            --region ${env.REGION}
+                    """,
+                    returnStdout: true
+                ).trim()
+
+                echo "Setting up CloudWatch schedule for ${FUNCTION_NAME}"
+
+                // Create or update rule
+                sh """
+                    aws events put-rule \
+                        --name "${RULE_NAME}" \
+                        --schedule-expression "rate(15 minutes)" \
+                        --state ENABLED \
+                        --region ${env.REGION}
+                """
+
+                // Add Lambda target
+                sh """
+                    aws events put-targets \
+                        --rule "${RULE_NAME}" \
+                        --targets Id="1",Arn="arn:aws:lambda:${env.REGION}:${awsAccountId}:function:${FUNCTION_NAME}" \
+                        --region ${env.REGION}
+                """
+
+                // Add permission (ignore if already exists)
+                sh """
+                    aws lambda add-permission \
+                        --function-name "${FUNCTION_NAME}" \
+                        --statement-id "cloudwatch-${RULE_NAME}" \
+                        --action "lambda:InvokeFunction" \
+                        --principal "events.amazonaws.com" \
+                        --source-arn "arn:aws:events:${env.REGION}:${awsAccountId}:rule/${RULE_NAME}" \
+                        --region ${env.REGION} || echo "Permission already exists"
+                """
+
+                echo "CloudWatch schedule configured successfully"
+            }
+        }
+    }
+}
