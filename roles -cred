@@ -35,3 +35,15 @@ stage('Prepare') {
         }
     }
 }
+
+
+if (!stdOut || stdOut.trim().isEmpty()) {
+    error "Failed to publish layer ${layer}: Empty response from AWS"
+}
+
+try {
+    def layerArn = new JsonSlurperClassic().parseText(stdOut).LayerVersionArn
+    reqMap[layer] = layerArn
+} catch (Exception e) {
+    error "Failed to parse layer ARN from AWS response: ${stdOut}. Error: ${e.message}"
+}
