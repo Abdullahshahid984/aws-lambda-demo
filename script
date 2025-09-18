@@ -1,0 +1,87 @@
+stage('Prepare') {
+    steps {
+        script {
+            // Set AWS Config for different environments
+            if (params.ENV.toLowerCase() == 'stage') {
+                credId = 'aws-nonprod-accesskey'
+                env.LAMBDA_ROLE = 'arn:aws:iam::297322678787:role/ops-api-lambda-nonprod-role'
+            } else if (params.ENV.toLowerCase() == 'prod') {
+                credId = 'aws-prod-accesskey'
+                env.LAMBDA_ROLE = 'arn:aws:iam::313923649386:role/ops-api-lambda-prod-role'
+            } else {
+                // Default for test/dev
+                credId = 'aws-nonprod-accesskey'
+                env.LAMBDA_ROLE = 'arn:aws:iam::297322678787:role/ops-api-full-access'
+            }
+
+            withCredentials([[
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: credId,
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]]) {
+                echo "INFO: Using AWS creds for ${params.ENV.toUpperCase()} environment (with LAMBDA_ROLE: ${env.LAMBDA_ROLE})"
+                sh "echo ${env.LAMBDA_ROLE}"
+
+                ['core'].each { layer ->
+                    echo "INFO: Zipping and publishing all required files for Lambda layer ${layer} to ${reqMap[layer].zip}...."
+                   
+                    sh """
+                        mkdir -p python/lib/python3.9/
+                        mv ${layer} python/lib/python3.9/site-packages
+                        zip -r ${reqMap[layer].zip} python -x "**/__pycache__/*" "*.pyc" ".git/*" "*/README.md" "**/Jenkinsfile" "logs/*" "test/*" ${reqMap[layer].exclude}
+                        mv python/lib/python3.9/site-packages ${layer}
+                    """
+
+                    // Safe layer publishing with error handling
+                    try {
+                        def stdOut = sh(returnStdout: true, script: """
+                            aws lambda publish-layer-version \
+                                --layer-name ${layer} \
+                                --zip-file fileb://${reqMap[layer].zip} \
+                                --compatible-runtimes python3.9
+                        """).trim()
+
+                        if (stdOut) {
+                            def layerArn = new groovy.json.JsonSlurperClassic().parseText(stdOut).LayerVersionArn
+                            layers.add(layerArn)
+                            echo "Published layer: ${layerArn}"
+                        } else {
+                            echo "WARNING: Empty response from layer publishing for ${layer}"
+                        }
+                    } catch (Exception e) {
+                        echo "WARNING: Failed to publish layer ${layer}: ${e.message}"
+                    }
+                }
+
+                // Wait for Lambda function with timeout
+                echo "INFO: Waiting for Lambda function configuration update to complete..."
+                def maxRetries = 30
+                def retryCount = 0
+               
+                while (retryCount < maxRetries) {
+                    try {
+                        def status = sh(returnStdout: true, script: """
+                            aws lambda get-function-configuration \
+                                --function-name ${env.FUNCTION_NAME} \
+                                --region ${env.REGION} \
+                                --query 'State' \
+                                --output text 2>/dev/null || echo "Pending"
+                        """).trim()
+
+                        echo "Current status: ${status}"
+                       
+                        if (status == 'Active') {
+                            break
+                        }
+                    } catch (Exception e) {
+                        echo "Status check failed: ${e.message}"
+                    }
+                   
+                    sleep(5)
+                    retryCount++
+                }
+            }
+        }
+    }
+}
