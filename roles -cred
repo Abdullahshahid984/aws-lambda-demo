@@ -1,0 +1,37 @@
+stage('Prepare') {
+    steps {
+        script {
+            // One source of truth: creds and role mapping per ENV
+            def ROLE_MAP = [
+                'stage': [
+                    credId: 'aws-nonprod-accesskey',
+                    role:   'arn:aws:iam::29372268787:role/*****-lambda-nonprod-role'
+                ],
+                'prod': [
+                    credId: 'aws-prod-accesskey',
+                    role:   'arn:aws:iam::313923649386:role/*****-lambda-prod-role'
+                ],
+                'default': [
+                    credId: 'aws-accesskey',
+                    role:   'arn:aws:iam::29372268787:role/*****-full-access'
+                ]
+            ]
+
+            def envKey = params.ENV?.toLowerCase() ?: 'default'
+            def config = ROLE_MAP.containsKey(envKey) ? ROLE_MAP[envKey] : ROLE_MAP['default']
+
+            withCredentials([[ 
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: config.credId,
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]]) {
+                env.LAMBDA_ROLE = config.role
+
+                echo "INFO: Using creds '${config.credId}' with role '${env.LAMBDA_ROLE}' for ${envKey.toUpperCase()}"
+
+                // Rest of your AWS Lambda deployment logic...
+            }
+        }
+    }
+}
