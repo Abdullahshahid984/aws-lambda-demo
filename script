@@ -53,6 +53,14 @@ stage('Deploy Lambda Function') {
                             --region ${env.REGION} \\
                             --query 'Configuration.[FunctionName,Runtime,LastModified]' \\
                             --output table
+                   """
+                } catch (Exception e) {
+                    error "Lambda deployment failed: ${e.message}. Check AWS credentials and permissions."
+                }
+            }
+        }
+    }
+}
                 }
             }
         }
