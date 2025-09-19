@@ -94,30 +94,39 @@ stage('Deploy Lambda Function') {
         }
     }
 }
-## **Complete Fixed Section:**
+stage('Deploy Lambda Function') {
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: credId,
+            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
+            script {
+                try {
+                    sh """
+                        # Create Lambda deployment package
+                        echo "Creating Lambda deployment package..."
+                        zip -r ${env.ZIP_FILE} lambda_function.py src/ config/ -x "*/__pycache__/*" "*.pyc" "*.pyo"
+                        echo "ZIP file created: \$(ls -la ${env.ZIP_FILE})"
 
-```bash
-# Check if function exists - FIXED LOGIC
-FUNCTION_EXISTS=$(aws lambda get-function \
-    --function-name ${env.FUNCTION_NAME} \
-    --region ${env.REGION} \
-    --query 'Configuration.FunctionName' \
-    --output text 2>/dev/null && echo "EXISTS" || echo "NOT_FOUND")
+                        # Check if function exists - FIXED LOGIC
+                        echo "Checking if Lambda function exists: ${env.FUNCTION_NAME}"
+                        FUNCTION_EXISTS=\$(aws lambda get-function \\
+                            --function-name ${env.FUNCTION_NAME} \\
+                            --region ${env.REGION} \\
+                            --query 'Configuration.FunctionName' \\
+                            --output text 2>/dev/null && echo "EXISTS" || echo "NOT_FOUND")
 
-if [ "$FUNCTION_EXISTS" = "NOT_FOUND" ]; then
-    echo "Creating new Lambda function: ${env.FUNCTION_NAME}"
-    aws lambda create-function \
-        --function-name ${env.FUNCTION_NAME} \
-        --runtime python3.9 \
-        --role ${env.LAMBDA_ROLE} \
-        --handler lambda_handler.lambda_handler \
-        --zip-file fileb://${env.ZIP_FILE} \
-        --region ${env.REGION}
-else
-    echo "Updating existing Lambda function: ${env.FUNCTION_NAME}"
-    aws lambda update-function-code \
-        --function-name ${env.FUNCTION_NAME} \
-        --zip-file fileb://${env.ZIP_FILE} \
-        --region ${env.REGION}
-fi
-       
+                        if [ "\\$FUNCTION_EXISTS" = "NOT_FOUND" ]; then
+                            echo "Creating new Lambda function: ${env.FUNCTION_NAME}"
+                            aws lambda create-function \\
+                                --function-name ${env.FUNCTION_NAME} \\
+                                --runtime python3.9 \\
+                                --role ${env.LAMBDA_ROLE} \\
+                                --handler lambda_handler.lambda_handler \\
+                                --zip-file fileb://${env.ZIP_FILE} \\
+                                --region ${env.REGION}
+                        else
+                            echo "Updating existing Lambda function: ${env.FUNCTION_NAME}"
+                           
