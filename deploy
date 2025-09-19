@@ -94,26 +94,5 @@ stage('Deploy Lambda Function') {
         }
     }
 }
-# Check if function exists with proper error handling
-FUNCTION_EXISTS=$(aws lambda get-function \
-    --function-name ${env.FUNCTION_NAME} \
-    --region ${env.REGION} \
-    --query 'Configuration.FunctionName' \
-    --output text 2>/dev/null && echo "EXISTS" || echo "NOT_FOUND")
 
-if [ "$FUNCTION_EXISTS" = "NOT_FOUND" ]; then
-    echo "Creating new Lambda function: ${env.FUNCTION_NAME}"
-    aws lambda create-function \
-        --function-name ${env.FUNCTION_NAME} \
-        --runtime python3.9 \
-        --role ${env.LAMBDA_ROLE} \
-        --handler lambda_handler.lambda_handler \
-        --zip-file fileb://${env.ZIP_FILE} \
-        --region ${env.REGION}
-else
-    echo "Updating existing Lambda function: ${env.FUNCTION_NAME}"
-    aws lambda update-function-code \
-        --function-name ${env.FUNCTION_NAME} \
-        --zip-file fileb://${env.ZIP_FILE} \
-        --region ${env.REGION}
-fi
+       
