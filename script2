@@ -1,0 +1,30 @@
+## **Key Issues I See in Your Screenshot:**
+
+1. **❌ Wrong variable syntax**: Using `$FUNCTION_NAME` instead of `${env.FUNCTION_NAME}`
+2. **❌ Missing env prefix**: `--function-name FUNCTION_NAME` should be `--function-name ${env.FUNCTION_NAME}`
+3. **❌ Incorrect escaping**: `\\$` instead of `\$` for shell variables
+4. **❌ Mixed variable types**: Trying to use shell variables as Groovy variables
+
+## **Simplified Alternative (Easier to Debug):**
+
+```groovy
+stage('Deploy Lambda Function') {
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: credId,
+            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
+            script {
+                try {
+                    // Use a separate script file to avoid escaping issues
+                    sh "chmod +x deploy_lambda.sh && ./deploy_lambda.sh"
+                   
+                } catch (Exception e) {
+                    error "Lambda deployment failed: ${e.message}. Check AWS credentials and permissions."
+                }
+            }
+        }
+    }
+}
