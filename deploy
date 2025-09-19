@@ -34,6 +34,13 @@ stage('Deploy Lambda Function') {
                         else
                             echo "Updating existing Lambda function: ${env.FUNCTION_NAME}"
                       """
-                    }
-                 }
-              }
+                     sh "chmod +x deploy_lambda.sh && ./deploy_lambda.sh"
+                   
+                } catch (Exception e) {
+                    error "Lambda deployment failed: ${e.message}. Check AWS credentials and permissions."
+                }
+            }
+        }
+    }
+}  
+                  
