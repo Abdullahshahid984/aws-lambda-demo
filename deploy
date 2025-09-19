@@ -6,7 +6,15 @@ stage('Deploy Lambda Function') {
             accessKeyVariable: 'AWS_ACCESS_KEY_ID',
             secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
         ]]) {
-            script {
+             script {
+                try {
+                    // ✅ ADD THIS: Create the ZIP file first
+                    sh """
+                        echo "Creating Lambda deployment package..."
+                        zip -r ${env.ZIP_FILE} lambda_function.py src/ config/ -x "*/__pycache__/*" "*.pyc" "*.pyo"
+                        echo "ZIP file created: \$(ls -la ${env.ZIP_FILE})"
+                    """
+                 script {
                 // Remove the environment block - LAMBDA_ROLE is already set in Prepare stage
                
                 try {
