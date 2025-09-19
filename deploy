@@ -14,102 +14,6 @@ stage('Deploy Lambda Function') {
                         zip -r ${env.ZIP_FILE} lambda_function.py src/ config/ -x "*/__pycache__/*" "*.pyc" "*.pyo"
                         echo "ZIP file created: \$(ls -la ${env.ZIP_FILE})"
 
-                        # Check if function exists
-                        echo "Checking if Lambda function exists: ${env.FUNCTION_NAME}"
-                        FUNCTION_EXISTS=\$(aws lambda get-function \
-                            --function-name ${env.FUNCTION_NAME} \
-                            --region ${env.REGION} \
-                            --query 'Configuration.FunctionName' \
-                            --output text 2>/dev/null || echo "NOT_FOUND")
-
-                        if [ "\$FUNCTION_EXISTS" = "NOT_FOUND" ]; then
-                            echo "Creating new Lambda function: ${env.FUNCTION_NAME}"
-                            aws lambda create-function \
-                                --function-name ${env.FUNCTION_NAME} \
-                                --runtime python3.9 \
-                                --role ${env.LAMBDA_ROLE} \
-                                --handler lambda_handler.lambda_handler \
-                                --zip-file fileb://${env.ZIP_FILE} \
-                                --region ${env.REGION}
-                        else
-                            echo "Updating existing Lambda function: ${env.FUNCTION_NAME}"
-                           
-                            # Update function code
-                            aws lambda update-function-code \
-                                --function-name ${env.FUNCTION_NAME} \
-                                --zip-file fileb://${env.ZIP_FILE} \
-                                --region ${env.REGION}
-                           
-                            # Update configuration if needed
-                            echo "Checking if function configuration needs update..."
-                            aws lambda update-function-configuration \
-                                --function-name ${env.FUNCTION_NAME} \
-                                --role ${env.LAMBDA_ROLE} \
-                                --runtime python3.9 \
-                                --handler lambda_handler.lambda_handler \
-                                --region ${env.REGION} 2>/dev/null || echo "Configuration update not needed"
-                        fi
-
-                        # Wait for function to become active
-                        echo "Waiting for Lambda function to become Active..."
-                        MAX_RETRIES=30
-                        RETRY_COUNT=0
-                        STATUS="Pending"
-
-                        while [ \$RETRY_COUNT -lt \$MAX_RETRIES ] && [ "\$STATUS" != "Active" ]; do
-                            STATUS=\$(aws lambda get-function-configuration \
-                                --function-name ${env.FUNCTION_NAME} \
-                                --region ${env.REGION} \
-                                --query 'State' \
-                                --output text 2>/dev/null || echo "Pending")
-                           
-                            echo "Attempt \$((RETRY_COUNT + 1))/\$MAX_RETRIES: Status - \$STATUS"
-                           
-                            if [ "\$STATUS" = "Active" ]; then
-                                break
-                            fi
-                           
-                            sleep 5
-                            RETRY_COUNT=\$((RETRY_COUNT + 1))
-                        done
-
-                        if [ "\$STATUS" != "Active" ]; then
-                            echo "ERROR: Lambda function did not become Active after \$MAX_RETRIES attempts"
-                            exit 1
-                        fi
-
-                        # Save ARN for CloudWatch
-                        aws lambda get-function \
-                            --function-name ${env.FUNCTION_NAME} \
-                            --region ${env.REGION} \
-                            --query 'Configuration.FunctionArn' \
-                            --output text > ${env.ARN_FILE}
-                       
-                        echo "Lambda deployment successful: \$(cat ${env.ARN_FILE})"
-                    """
-                } catch (Exception e) {
-                    error "Lambda deployment failed: ${e.message}. Check AWS credentials and permissions."
-                }
-            }
-        }
-    }
-}
-stage('Deploy Lambda Function') {
-    steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: credId,
-            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-        ]]) {
-            script {
-                try {
-                    sh """
-                        # Create Lambda deployment package
-                        echo "Creating Lambda deployment package..."
-                        zip -r ${env.ZIP_FILE} lambda_function.py src/ config/ -x "*/__pycache__/*" "*.pyc" "*.pyo"
-                        echo "ZIP file created: \$(ls -la ${env.ZIP_FILE})"
-
                         # Check if function exists - FIXED LOGIC
                         echo "Checking if Lambda function exists: ${env.FUNCTION_NAME}"
                         FUNCTION_EXISTS=\$(aws lambda get-function \\
@@ -129,4 +33,7 @@ stage('Deploy Lambda Function') {
                                 --region ${env.REGION}
                         else
                             echo "Updating existing Lambda function: ${env.FUNCTION_NAME}"
-                           
+                      """
+                    }
+                 }
+              }
