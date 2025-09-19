@@ -8,7 +8,6 @@ stage('Deploy Lambda Function') {
         ]]) {
             script {
                 try {
-                    // Single shell script for the entire deployment process
                     sh """
                         # Create Lambda deployment package
                         echo "Creating Lambda deployment package..."
