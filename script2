@@ -1,29 +1,59 @@
-## **Key Issues I See in Your Screenshot:**
-
-1. **❌ Wrong variable syntax**: Using `$FUNCTION_NAME` instead of `${env.FUNCTION_NAME}`
-2. **❌ Missing env prefix**: `--function-name FUNCTION_NAME` should be `--function-name ${env.FUNCTION_NAME}`
-3. **❌ Incorrect escaping**: `\\$` instead of `\$` for shell variables
-4. **❌ Mixed variable types**: Trying to use shell variables as Groovy variables
-
-## **Simplified Alternative (Easier to Debug):**
-
-```groovy
-stage('Deploy Lambda Function') {
+stage('Setup CloudWatch Schedule') {
     steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: credId,
-            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-        ]]) {
-            script {
-                try {
-                    // Use a separate script file to avoid escaping issues
-                    sh "chmod +x deploy_lambda.sh && ./deploy_lambda.sh"
-                   
-                } catch (Exception e) {
-                    error "Lambda deployment failed: ${e.message}. Check AWS credentials and permissions."
-                }
+        script {
+            // Map env → creds + role (keep same pattern as deploy stage)
+            if (params.ENV.toLowerCase() == 'stage') {
+                credId = 'aws-stage-accesskey'
+                env.FUNCTION_NAME = "my-lambda-stage"
+                env.LAMBDA_ROLE   = "arn:aws:iam::222222222222:role/lambda-stage-role"
+            } else if (params.ENV.toLowerCase() == 'prod') {
+                credId = 'aws-prod-accesskey'
+                env.FUNCTION_NAME = "my-lambda-prod"
+                env.LAMBDA_ROLE   = "arn:aws:iam::333333333333:role/lambda-prod-role"
+            } else {
+                credId = 'aws-test-accesskey'
+                env.FUNCTION_NAME = "my-lambda-test"
+                env.LAMBDA_ROLE   = "arn:aws:iam::111111111111:role/lambda-test-role"
+            }
+
+            withCredentials([[
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: credId,
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]]) {
+                sh """
+                    set -e
+
+                    echo "Fetching Lambda ARN..."
+                    LAMBDA_ARN=\$(aws lambda get-function \
+                        --function-name ${env.FUNCTION_NAME} \
+                        --region ${env.REGION} \
+                        --query 'Configuration.FunctionArn' \
+                        --output text)
+
+                    echo "Creating CloudWatch Events rule..."
+                    aws events put-rule \
+                        --schedule-expression "rate(15 minutes)" \
+                        --name ${env.FUNCTION_NAME}-schedule \
+                        --region ${env.REGION}
+
+                    echo "Adding permission for CloudWatch to invoke Lambda..."
+                    aws lambda add-permission \
+                        --function-name ${env.FUNCTION_NAME} \
+                        --statement-id ${env.FUNCTION_NAME}-event \
+                        --action lambda:InvokeFunction \
+                        --principal events.amazonaws.com \
+                        --region ${env.REGION} || true
+
+                    echo "Creating target for CloudWatch Events..."
+                    aws events put-targets \
+                        --rule ${env.FUNCTION_NAME}-schedule \
+                        --targets "Id"="1","Arn"="\$LAMBDA_ARN" \
+                        --region ${env.REGION}
+
+                    echo "CloudWatch schedule setup completed for ${params.ENV}"
+                """
             }
         }
     }
