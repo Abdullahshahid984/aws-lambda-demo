@@ -61,6 +61,73 @@ stage('Deploy Lambda Function') {
         }
     }
 }
+
+
+
+deploy 2
+stage('Deploy Lambda Function') {
+    steps {
+        script {
+            // Environment-specific configuration
+            switch(params.ENV) {
+                case 'test':
+                    env.FUNCTION_NAME = "my-lambda-test"
+                    env.LAMBDA_ROLE   = "arn:aws:iam::123456789012:role/lambda-test-role"   // replace with actual role
+                    env.REGION        = "us-east-1"
+                    env.AWS_CRED_ID   = "aws-test-accesskey"
+                    break
+                case 'stage':
+                    env.FUNCTION_NAME = "my-lambda-stage"
+                    env.LAMBDA_ROLE   = "arn:aws:iam::234567890123:role/lambda-stage-role" // replace with actual role
+                    env.REGION        = "us-east-1"
+                    env.AWS_CRED_ID   = "aws-stage-accesskey"
+                    break
+                case 'prod':
+                    env.FUNCTION_NAME = "my-lambda-prod"
+                    env.LAMBDA_ROLE   = "arn:aws:iam::345678901234:role/lambda-prod-role"  // replace with actual role
+                    env.REGION        = "us-east-1"
+                    env.AWS_CRED_ID   = "aws-prod-accesskey"
+
+                    // Manual approval before deploying to production
+                    input message: "You are about to deploy to PROD. Continue?"
+                    break
+                default:
+                    error("Invalid ENV selected: ${params.ENV}")
+            }
+
+            withCredentials([[ 
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: env.AWS_CRED_ID,
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]]) {
+                try {
+                    sh """
+                        echo "Packaging Lambda for ${params.ENV}..."
+                        zip -r ${env.ZIP_FILE} lambda_function.py src/ config/ -x "*/__pycache__/*" "*.pyc" "*.pyo"
+
+                        echo "Checking if Lambda function exists..."
+                        if aws lambda get-function --function-name ${env.FUNCTION_NAME} --region ${env.REGION} >/dev/null 2>&1; then
+                            echo "Updating Lambda function: ${env.FUNCTION_NAME}"
+                            aws lambda update-function-code \
+                                --function-name ${env.FUNCTION_NAME} \
+                                --zip-file fileb://${env.ZIP_FILE} \
+                                --region ${env.REGION}
+                        else
+                            echo "Creating new Lambda function: ${env.FUNCTION_NAME}"
+                            aws lambda create-function \
+                                --function-name ${env.FUNCTION_NAME} \
+                                --runtime python3.9 \
+                                --role ${env.LAMBDA_ROLE} \
+                                --handler lambda_function.lambda_handler \
+                                --zip-file fileb://${env.ZIP_FILE} \
+                                --region ${env.REGION}
+                        fi
+
+                        echo "Deployment completed for ${params.ENV}"
+                    """
+                } catch (Exception e) {
+                    error "Lambda deployment failed for ${params.ENV}: ${e.message}"
                 }
             }
         }
