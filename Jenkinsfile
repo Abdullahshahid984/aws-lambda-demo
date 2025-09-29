@@ -1,21 +1,22 @@
 pipeline {
     agent any
 
-    environment {
-        FUNCTION_NAME = 'hey-world-demo'
-        REGION = 'us-east-1'
-        ZIP_FILE = "lambda_package.zip"
-        ARN_FILE = 'lambda_arn.txt'
-        SONAR_SCANNER_HOME = tool name: 'SonarScanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
-    }
-
     parameters {
-        string defaultValue: 'main', description: 'Enter git branch', name: 'GIT_BRANCH', trim: true
+        string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Enter git branch to deploy', trim: true)
         choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Choose deployment environment')
     }
 
+    environment {
+        BASE_FUNCTION_NAME = 'hey-world-demo'
+        REGION = 'us-east-1'
+        SONAR_PROJECT_KEY = "aws-lambda"
+        SONAR_ORG = "your-org"
+        ZIP_FILE = "lambda_package.zip"
+    }
+
     stages {
-        stage('Clone Repository') {
+
+        stage('Checkout') {
             steps {
                 checkout([$class: 'GitSCM',
                     branches: [[name: "*/${params.GIT_BRANCH}"]],
@@ -27,7 +28,16 @@ pipeline {
             }
         }
 
-        stage('Prepare') {
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                  echo "Installing Python dependencies into test/devtest..."
+                  pip install -r test/devtest/requirements.txt -t test/devtest
+                '''
+            }
+        }
+
+        stage('Package Lambda') {
             steps {
                 sh '''
                     echo "Zipping all required files for Lambda deployment..."
@@ -42,104 +52,127 @@ pipeline {
             }
         }
 
-        // ✅ New SonarQube Stage
-      //  stage('SonarQube Scan') {
-       //     steps {
-        //        withSonarQubeEnv('sq1') { // This must match your Jenkins SonarQube server name
-         //           withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'TOKEN')]) {
-          //              sh '''
-           //                 echo "Running SonarQube Scan..."
-           //                 ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
-             //               -Dsonar.projectKey=aws-lambda-demo \
-              //              -Dsonar.sources=test \
-                //            -Dsonar.login=$TOKEN
-                 //       '''
-               //     }
-               // }
-           // }
-        //}
-
-        stage('Deploy Lambda') {
+        // Commented Sonar Stage
+        /*
+        stage('SonarQube Analysis') {
+            environment {
+                SONAR_TOKEN = credentials('SONAR_TOKEN')
+            }
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'lambda-function-aws-cred',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-                    sh '''
-                        echo "Creating Lambda function..."
-                        aws lambda create-function \
-                            --function-name $FUNCTION_NAME \
-                            --runtime python3.13 \
-                            --role arn:aws:iam::529088259986:role/service-role/s3_execRole \
-                            --handler test.devtest.lambda_function.lambda_handler \
-                            --zip-file fileb://$ZIP_FILE \
-                            --region $REGION || true
+                sh '''
+                  sonar-scanner \
+                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                    -Dsonar.organization=${SONAR_ORG} \
+                    -Dsonar.sources=. \
+                    -Dsonar.host.url=https://sonarcloud.io \
+                    -Dsonar.login=${SONAR_TOKEN}
+                '''
+            }
+        }
+        */
 
-                        echo "Waiting for Lambda function to become Active..."
-                        while true; do
-                            STATUS=$(aws lambda get-function-configuration \
-                                --function-name $FUNCTION_NAME \
-                                --region $REGION \
-                                --query 'State' --output text)
-                            echo "Current status: $STATUS"
-                            if [ "$STATUS" = "Active" ]; then
-                                break
-                            fi
-                            sleep 5
-                        done
+        stage('Deploy to AWS Lambda') {
+            steps {
+                script {
+                    def awsCredId = ''
+                    def lambdaRole = ''
+                    def functionName = "${env.BASE_FUNCTION_NAME}-${params.ENV}"
 
-                        echo "Updating function code..."
-                        aws lambda update-function-code \
-                            --function-name $FUNCTION_NAME \
-                            --zip-file fileb://$ZIP_FILE \
-                            --region $REGION
+                    if (params.ENV == 'dev') {
+                        awsCredId = 'aws-cred-dev'
+                        lambdaRole = 'arn:aws:iam::529088259986:role/lambda_exec_role_dev'
+                    } else if (params.ENV == 'stage') {
+                        awsCredId = 'aws-cred-stage'
+                        lambdaRole = 'arn:aws:iam::529088259986:role/lambda_exec_role_stage'
+                    } else if (params.ENV == 'prod') {
+                        awsCredId = 'aws-cred-prod'
+                        lambdaRole = 'arn:aws:iam::529088259986:role/lambda_exec_role_prod'
+                    }
 
-                        echo "Getting Lambda ARN..."
-                        aws lambda get-function \
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: awsCredId]]) {
+                        sh '''
+                          export AWS_DEFAULT_REGION=$REGION
+                          FUNCTION_NAME="${BASE_FUNCTION_NAME}-${ENV}"
+
+                          # Check if function exists
+                          if ! aws lambda get-function --function-name $FUNCTION_NAME > /dev/null 2>&1; then
+                            echo "Creating new Lambda function: $FUNCTION_NAME"
+                            aws lambda create-function \
+                              --function-name $FUNCTION_NAME \
+                              --runtime python3.13 \
+                              --role ''' + lambdaRole + ''' \
+                              --handler hello-world.lambda_function.lambda_handler \
+                              --zip-file fileb://$ZIP_FILE
+
+                            echo "Waiting for Lambda to become active..."
+                            aws lambda wait function-active --function-name $FUNCTION_NAME
+                          fi
+
+                          # Update Lambda code (safe after wait)
+                          aws lambda update-function-code \
                             --function-name $FUNCTION_NAME \
-                            --region $REGION \
-                            --query 'Configuration.FunctionArn' \
-                            --output text > $ARN_FILE
-                    '''
+                            --zip-file fileb://$ZIP_FILE
+                        '''
+                    }
                 }
             }
         }
 
         stage('Setup CloudWatch Schedule') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'lambda-function-aws-cred',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-                    sh '''
-                        LAMBDA_ARN=$(cat $ARN_FILE)
+                script {
+                    def awsCredId = ''
 
-                        echo "Creating CloudWatch Events rule..."
+                    if (params.ENV == 'dev') {
+                        awsCredId = 'aws-cred-dev'
+                    } else if (params.ENV == 'stage') {
+                        awsCredId = 'aws-cred-stage'
+                    } else if (params.ENV == 'prod') {
+                        awsCredId = 'aws-cred-prod'
+                    }
+
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: awsCredId]]) {
+                        sh '''
+                        export AWS_DEFAULT_REGION=$REGION
+                        FUNCTION_NAME="${BASE_FUNCTION_NAME}-${ENV}"
+                        RULE_NAME="hello-world-schedule-${ENV}"
+                        SCHEDULE="rate(5 minutes)"
+                        STATEMENT_ID="cw-invoke-${ENV}"
+
+                        # Create or update CloudWatch rule
                         aws events put-rule \
-                            --schedule-expression "rate(15 minutes)" \
-                            --name hello-demo-schedule \
-                            --region $REGION
+                            --name $RULE_NAME \
+                            --schedule-expression "$SCHEDULE" \
+                            --state ENABLED
 
-                        echo "Adding permission for CloudWatch to invoke Lambda..."
-                        aws lambda add-permission \
-                            --function-name $FUNCTION_NAME \
-                            --statement-id hello-demo-event \
-                            --action lambda:InvokeFunction \
-                            --principal events.amazonaws.com \
-                            --region $REGION || true
+                        # Resolve Lambda ARN
+                        FUNCTION_ARN=$(aws lambda get-function --function-name $FUNCTION_NAME --query 'Configuration.FunctionArn' --output text)
 
-                        echo "Creating target for CloudWatch Events..."
+                        # Add Lambda as target of the rule
                         aws events put-targets \
-                            --rule hello-demo-schedule \
-                            --targets "Id"="1","Arn"="$LAMBDA_ARN" \
-                            --region $REGION
-                    '''
+                            --rule $RULE_NAME \
+                            --targets "Id"="1","Arn"=$FUNCTION_ARN
+
+                        # Resolve Rule ARN
+                        SOURCE_ARN=$(aws events describe-rule --name $RULE_NAME --query 'Arn' --output text)
+
+                        # Check if permission already exists
+                        if ! aws lambda get-policy --function-name $FUNCTION_NAME | grep -q $STATEMENT_ID; then
+                            echo "Adding new permission: $STATEMENT_ID"
+                            aws lambda add-permission \
+                                --function-name $FUNCTION_NAME \
+                                --statement-id $STATEMENT_ID \
+                                --action 'lambda:InvokeFunction' \
+                                --principal events.amazonaws.com \
+                                --source-arn $SOURCE_ARN
+                        else
+                            echo "Permission $STATEMENT_ID already exists, skipping..."
+                        fi
+                        '''
+                    }
                 }
             }
         }
+
     }
 }
