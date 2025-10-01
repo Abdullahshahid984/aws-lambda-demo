@@ -3,3 +3,6 @@ service:
   identifier: awslambdademo
   orgIdentifier: default
   projectIdentifier: lambda
+  serviceDefinition:
+    spec: {}
+    type: AwsLambda
