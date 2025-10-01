@@ -1,0 +1,5 @@
+service:
+  name: aws-lambda-demo
+  identifier: awslambdademo
+  orgIdentifier: default
+  projectIdentifier: lambda
