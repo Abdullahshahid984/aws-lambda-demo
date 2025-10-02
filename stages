@@ -314,34 +314,9 @@ stage:
 
 
 
-Key Features:
-
-Environment Configuration - Switch/case logic for test/stage/prod environments with specific function names, roles, and regions
-
-Create Deployment Package - Zips the Lambda function code with exclusions for cache files
-
-Deploy Lambda Function - Smart deployment that:
-
-Checks if function exists
-Updates existing function OR creates new one
-Waits for function to be active
-Verify Deployment - Confirms successful deployment by querying the function configuration
-
-Production Approval - Manual approval step that only runs when deploying to prod (conditional execution)
-
-What to customize:
-
-Replace <PREFIX>, <ACCOUNT_ID>, <ROLE_PREFIX> with your actual values
-Update account.AWS_Connector to match your connector reference
-Adjust the handler path (lambda_handler.lambda_handler) to match your actual handler
-Modify memory size (256) and timeout (30) as needed
-Update the zip command paths (lambda_function.py src/ config/) to match your project structure
-Note: The approval step uses a conditional when clause so it only triggers for production deployments, just like your Jenkins input statement!
 
 
-abdullah shahid
-11:44 AM (2 hours ago)
-to me
+
 
 - stage:
       name: Setup CloudWatch Schedule
