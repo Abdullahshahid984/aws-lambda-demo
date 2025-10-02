@@ -4,5 +4,13 @@ service:
   orgIdentifier: default
   projectIdentifier: lambda
   serviceDefinition:
-    spec: {}
     type: AwsLambda
+    spec:
+      awsLambda:
+        functions:
+          - functionName: hello-world            
+            runtime: python3.13                      
+            handler: lambda_function.lambda_handler                   
+            role: arn:aws:iam::529088259986:role/lambda_exec_role_dev   
+            memorySize: 512                           
+            timeout: 30
