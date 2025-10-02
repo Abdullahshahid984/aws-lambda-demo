@@ -1,0 +1,195 @@
+pipeline:
+  name: aws-lambda-demo
+  identifier: aws_lambda_demo
+  projectIdentifier: my_project
+  orgIdentifier: default
+  tags: {}
+  properties:
+    ci:
+      codebase:
+        connectorRef: githup-harness-connector   # <-- Harness Git Connector
+        repoName: AngelsTech/aws-lambda-demo
+        build: <+input>                  # pipeline input for git branch
+
+  stages:
+    - stage:
+        name: Build & Package
+        identifier: Build_Package
+        type: CI
+        spec:
+          cloneCodebase: true
+          infrastructure:
+            type: KubernetesDirect
+            spec:
+              connectorRef: my_k8s_connector
+              namespace: harness-delegate
+          execution:
+            steps:
+              - step:
+                  name: Install Dependencies
+                  identifier: Install_Dependencies
+                  type: Run
+                  spec:
+                    connectorRef: my_docker_connector
+                    image: python:3.13
+                    shell: Sh
+                    command: |
+                      echo "Installing Python dependencies..."
+                      mkdir -p python
+                      pip install -r test/devtest/requirements.txt -t python
+                      
+                      # Package dependencies into a Lambda Layer
+                      zip -r layer_package.zip python
+
+              - step:
+                  name: Package Lambda
+                  identifier: Package_Lambda
+                  type: Run
+                  spec:
+                    connectorRef: my_docker_connector
+                    image: python:3.13
+                    shell: Sh
+                    command: |
+                      echo "Zipping Lambda function code..."
+                      zip -r lambda_package.zip test \
+                        -x "**/.git/*" \
+                        -x "**/README.md" \
+                        -x "**/Jenkinsfile"
+                      unzip -l lambda_package.zip
+
+              # Optional Sonar step
+              # - step:
+              #     name: SonarQube Analysis
+              #     identifier: SonarQube
+              #     type: Run
+              #     spec:
+              #       image: sonarsource/sonar-scanner-cli
+              #       shell: Sh
+              #       command: |
+              #         sonar-scanner \
+              #           -Dsonar.projectKey=aws-lambda \
+              #           -Dsonar.organization=your-org \
+              #           -Dsonar.sources=. \
+              #           -Dsonar.host.url=https://sonarcloud.io \
+              #           -Dsonar.login=<+secrets.getValue("SONAR_TOKEN")>
+
+    - stage:
+        name: Deploy Lambda
+        identifier: Deploy_Lambda
+        type: Deployment
+        spec:
+          service:
+            serviceRef: aws_lambda_service
+          environment:
+            environmentRef: <+input>       # dev/stage/prod chosen at runtime
+            deployToAll: false
+          execution:
+            steps:
+              - step:
+                  name: Publish Lambda Layer
+                  identifier: PublishLayer
+                  type: Run
+                  spec:
+                    connectorRef: my_docker_connector
+                    image: amazon/aws-cli:2.15.0
+                    shell: Sh
+                    command: |
+                      export AWS_DEFAULT_REGION=us-east-1
+                      LAYER_NAME="hey-world-deps-<+env.name>"
+
+                      echo "Publishing Lambda Layer..."
+                      LAYER_VERSION=$(aws lambda publish-layer-version \
+                        --layer-name $LAYER_NAME \
+                        --zip-file fileb://layer_package.zip \
+                        --compatible-runtimes python3.13 \
+                        --query Version --output text)
+
+                      echo "Layer version published: $LAYER_VERSION"
+                      echo "LAYER_VERSION=$LAYER_VERSION" >> layer.env
+                    outputVariables:
+                      - name: LAYER_VERSION
+                        type: String
+                        value: LAYER_VERSION
+
+              - step:
+                  name: Deploy Lambda Function
+                  identifier: DeployLambda
+                  type: Run
+                  spec:
+                    connectorRef: my_docker_connector
+                    image: amazon/aws-cli:2.15.0
+                    shell: Sh
+                    command: |
+                      export AWS_DEFAULT_REGION=us-east-1
+                      FUNCTION_NAME="hey-world-demo-<+env.name>"
+                      ZIP_FILE="lambda_package.zip"
+                      LAYER_VERSION="<+steps.PublishLayer.output.outputVariables.LAYER_VERSION>"
+
+                      ROLE_ARN=""
+                      if [ "<+env.name>" = "dev" ]; then
+                        ROLE_ARN="arn:aws:iam::529088259986:role/lambda_exec_role_dev"
+                      elif [ "<+env.name>" = "stage" ]; then
+                        ROLE_ARN="arn:aws:iam::529088259986:role/lambda_exec_role_stage"
+                      elif [ "<+env.name>" = "prod" ]; then
+                        ROLE_ARN="arn:aws:iam::529088259986:role/lambda_exec_role_prod"
+                      fi
+
+                      if ! aws lambda get-function --function-name $FUNCTION_NAME > /dev/null 2>&1; then
+                        echo "Creating new Lambda function..."
+                        aws lambda create-function \
+                          --function-name $FUNCTION_NAME \
+                          --runtime python3.13 \
+                          --role $ROLE_ARN \
+                          --handler hello-world.lambda_function.lambda_handler \
+                          --zip-file fileb://$ZIP_FILE \
+                          --layers arn:aws:lambda:us-east-1:529088259986:layer:hey-world-deps-<+env.name>:$LAYER_VERSION
+                        aws lambda wait function-active --function-name $FUNCTION_NAME
+                      fi
+
+                      aws lambda update-function-code \
+                        --function-name $FUNCTION_NAME \
+                        --zip-file fileb://$ZIP_FILE
+
+                      aws lambda update-function-configuration \
+                        --function-name $FUNCTION_NAME \
+                        --layers arn:aws:lambda:us-east-1:529088259986:layer:hey-world-deps-<+env.name>:$LAYER_VERSION
+
+              - step:
+                  name: Setup CloudWatch Schedule
+                  identifier: CloudWatch
+                  type: Run
+                  spec:
+                    connectorRef: my_docker_connector
+                    image: amazon/aws-cli:2.15.0
+                    shell: Sh
+                    command: |
+                      export AWS_DEFAULT_REGION=us-east-1
+                      FUNCTION_NAME="hey-world-demo-<+env.name>"
+                      RULE_NAME="hello-world-schedule-<+env.name>"
+                      SCHEDULE="rate(5 minutes)"
+                      STATEMENT_ID="cw-invoke-<+env.name>"
+
+                      aws events put-rule \
+                        --name $RULE_NAME \
+                        --schedule-expression "$SCHEDULE" \
+                        --state ENABLED
+
+                      FUNCTION_ARN=$(aws lambda get-function --function-name $FUNCTION_NAME --query 'Configuration.FunctionArn' --output text)
+
+                      aws events put-targets \
+                        --rule $RULE_NAME \
+                        --targets "Id"="1","Arn"=$FUNCTION_ARN
+
+                      SOURCE_ARN=$(aws events describe-rule --name $RULE_NAME --query 'Arn' --output text)
+
+                      if ! aws lambda get-policy --function-name $FUNCTION_NAME | grep -q $STATEMENT_ID; then
+                        echo "Adding new permission..."
+                        aws lambda add-permission \
+                          --function-name $FUNCTION_NAME \
+                          --statement-id $STATEMENT_ID \
+                          --action 'lambda:InvokeFunction' \
+                          --principal events.amazonaws.com \
+                          --source-arn $SOURCE_ARN
+                      else
+                        echo "Permission already exists, skipping..."
+                      fi
