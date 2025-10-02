@@ -1,0 +1,134 @@
+stages:
+  - stage:
+      name: Prepare
+      identifier: prepare
+      type: CI
+      spec:
+        cloneCodebase: true
+        platform:
+          os: Linux
+          arch: Amd64
+        runtime:
+          type: Cloud
+          spec: {}
+        infrastructure:
+          type: KubernetesDirect
+          spec:
+            connectorRef: <+input>
+            namespace: <+input>
+        execution:
+          steps:
+            - step:
+                type: Run
+                name: Set Lambda Role
+                identifier: set_lambda_role
+                spec:
+                  connectorRef: account.AWS_Connector  # Reference your AWS connector
+                  shell: Bash
+                  command: |
+                    # Set Lambda role based on environment
+                    if [ "<+pipeline.variables.ENV>" = "stage" ]; then
+                      export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<STAGE_ROLE>-lambda-nonprod-role"
+                    elif [ "<+pipeline.variables.ENV>" = "prod" ]; then
+                      export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<PROD_ROLE>-lambda-prod-role"
+                    else
+                      # Sets the default
+                      export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<DEFAULT_ROLE>-access"
+                    fi
+                   
+                    echo "INFO: Using Lambda role for <+pipeline.variables.ENV> environment (LAMBDA_ROLE: ${LAMBDA_ROLE})"
+                   
+                    # Export for use in subsequent steps
+                    echo "LAMBDA_ROLE=${LAMBDA_ROLE}" >> $HARNESS_ENV
+           
+            - step:
+                type: Run
+                name: Package Lambda Layers
+                identifier: package_lambda_layers
+                spec:
+                  connectorRef: account.AWS_Connector  # Reference your AWS connector
+                  shell: Bash
+                  command: |
+                    # Process each core layer
+                    for layer in core/*; do
+                      echo "INFO: Zipping and publishing all required files for Lambda layer ${layer} to ${reqMap[layer].zip}...."
+                     
+                      # Create directory structure
+                      mkdir -p python/lib/python3.9/
+                     
+                      # Copy layer files
+                      mv ${layer} python/lib/python3.9/site-packages
+                     
+                      # Create zip file
+                      zip -r ${reqMap[layer].zip} python -x "**/__pycache__/*" "*.pyc" "*.git/*" "**README.md" "**/Jenkinsfile" "logs/*" "test/*" ${reqMap[layer].exclude}
+                     
+                      # Move to site-packages for next iteration
+                      mv python/lib/python3.9/site-packages ${layer}
+                    done
+           
+            - step:
+                type: Run
+                name: Publish Lambda Layers
+                identifier: publish_lambda_layers
+                spec:
+                  connectorRef: account.AWS_Connector  # Reference your AWS connector
+                  shell: Bash
+                  command: |
+                    # Safe layer publishing with error handling
+                    for layer in core/*; do
+                      echo "Publishing layer: ${layer}"
+                     
+                      stdout=$(aws lambda publish-layer-version \
+                        --layer-name ${layer} \
+                        --zip-file fileb://${reqMap[layer].zip} \
+                        --compatible-runtimes python3.9 2>&1) || {
+                        echo "WARNING: Failed to publish layer ${layer}: ${stdout}"
+                        continue
+                      }
+                     
+                      if [ -n "$stdout" ]; then
+                        layerArn=$(echo "$stdout" | python3 -c "import sys, json; print(json.load(sys.stdin)['LayerVersionArn'])")
+                        echo "Published layer: ${layerArn}"
+                      else
+                        echo "WARNING: Empty response from layer publishing for ${layer}"
+                      fi
+                    done
+           
+            - step:
+                type: Run
+                name: Wait for Lambda Configuration
+                identifier: wait_lambda_config
+                spec:
+                  connectorRef: account.AWS_Connector  # Reference your AWS connector
+
+                  shell: Bash
+                  command: |
+                    echo "INFO: Waiting for Lambda function configuration update to complete..."
+                    maxRetries=30
+                    retryCount=0
+                   
+                    while [ $retryCount -lt $maxRetries ]; do
+                      status=$(aws lambda get-function-configuration \
+                        --function-name $FUNCTION_NAME \
+                        --region ${REGION} \
+                        --query 'State' \
+                        --output text 2>/dev/null || echo "Pending")
+                     
+                      echo "Current status: ${status}"
+                     
+                      if [ "$status" = "Active" ]; then
+                        echo "Lambda function is active"
+                        break
+                      fi
+                     
+                      if [ $retryCount -ge $maxRetries ]; then
+                        echo "Status check failed: Timeout waiting for Active state"
+                        exit 1
+                      fi
+                     
+                      sleep 5
+                      ((retryCount++))
+                    done
+                  envVariables:
+                    FUNCTION_NAME: <+pipeline.variables.FUNCTION_NAME>
+                    REGION: <+pipeline.variables.REGION>
