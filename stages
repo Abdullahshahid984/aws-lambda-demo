@@ -132,3 +132,218 @@ stages:
                   envVariables:
                     FUNCTION_NAME: <+pipeline.variables.FUNCTION_NAME>
                     REGION: <+pipeline.variables.REGION>
+stage:
+      name: Setup CloudWatch Schedule
+      identifier: setup_cloudwatch_schedule
+      type: CI
+      spec:
+        platform:
+          os: Linux
+          arch: Amd64
+        runtime:
+          type: Cloud
+          spec: {}
+        infrastructure:
+          type: KubernetesDirect
+          spec:
+            connectorRef: <+input>
+            namespace: <+input>
+        execution:
+          steps:
+            - step:
+                type: Run
+                name: Set Environment Configuration
+                identifier: set_env_config
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    # Environment-specific configuration
+                    case "<+pipeline.variables.ENV>" in
+                      stage)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-stage"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-lambda-nonprod-role"
+                        ;;
+                      prod)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-prod"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-lambda-prod-role"
+                        ;;
+                      *)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-test"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-access"
+                        ;;
+                    esac
+                   
+                    # Export variables for subsequent steps
+                    echo "FUNCTION_NAME=${FUNCTION_NAME}" >> $HARNESS_ENV
+                    echo "LAMBDA_ROLE=${LAMBDA_ROLE}" >> $HARNESS_ENV
+                   
+                    echo "Configuration set for environment: <+pipeline.variables.ENV>"
+                    echo "Function: ${FUNCTION_NAME}"
+           
+            - step:
+                type: Run
+                name: Get Lambda ARN
+                identifier: get_lambda_arn
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Fetching Lambda ARN..."
+                   
+                    LAMBDA_ARN=$(aws lambda get-function \
+                      --function-name $FUNCTION_NAME \
+                      --region $REGION \
+                      --query 'Configuration.FunctionArn' \
+                      --output text)
+                   
+                    echo "Lambda ARN: ${LAMBDA_ARN}"
+                   
+                    # Export for next steps
+                    echo "LAMBDA_ARN=${LAMBDA_ARN}" >> $HARNESS_ENV
+                  envVariables:
+                    FUNCTION_NAME: <+execution.steps.set_env_config.output.outputVariables.FUNCTION_NAME>
+                    REGION: <+pipeline.variables.REGION>
+           
+            - step:
+                type: Run
+                name: Create CloudWatch Events Rule
+                identifier: create_cloudwatch_rule
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Creating CloudWatch Events rule..."
+                   
+                    RULE_NAME="${FUNCTION_NAME}-schedule"
+                   
+                    aws events put-rule \
+                      --schedule-expression "rate(15 minutes)" \
+                      --name ${RULE_NAME} \
+                      --region $REGION
+                   
+                    echo "CloudWatch Events rule created: ${RULE_NAME}"
+                   
+                    # Export rule name for next steps
+                    echo "RULE_NAME=${RULE_NAME}" >> $HARNESS_ENV
+                  envVariables:
+                    FUNCTION_NAME: <+execution.steps.set_env_config.output.outputVariables.FUNCTION_NAME>
+                    REGION: <+pipeline.variables.REGION>
+           
+            - step:
+                type: Run
+                name: Add Lambda Permission for CloudWatch
+                identifier: add_lambda_permission
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Adding permission for CloudWatch to invoke Lambda..."
+                   
+                    STATEMENT_ID="${FUNCTION_NAME}-event"
+                   
+                    # Remove existing permission if it exists (ignore errors)
+                    aws lambda remove-permission \
+                      --function-name $FUNCTION_NAME \
+                      --statement-id ${STATEMENT_ID} \
+                      --region $REGION 2>/dev/null || true
+                   
+                    # Add new permission
+                    aws lambda add-permission \
+                      --function-name $FUNCTION_NAME \
+                      --statement-id ${STATEMENT_ID} \
+                      --action lambda:InvokeFunction \
+                      --principal events.amazonaws.com \
+                      --region $REGION
+                   
+                    echo "Permission added for CloudWatch to invoke Lambda"
+                  envVariables:
+                    FUNCTION_NAME: <+execution.steps.set_env_config.output.outputVariables.FUNCTION_NAME>
+                    REGION: <+pipeline.variables.REGION>
+           
+            - step:
+                type: Run
+                name: Create CloudWatch Events Target
+                identifier: create_cloudwatch_target
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Creating target for CloudWatch Events..."
+                   
+                    aws events put-targets \
+                      --rule ${RULE_NAME} \
+                      --targets "Id"="1","Arn"="${LAMBDA_ARN}" \
+                      --region $REGION
+                   
+                    echo "CloudWatch Events target created successfully"
+                  envVariables:
+                    RULE_NAME: <+execution.steps.create_cloudwatch_rule.output.outputVariables.RULE_NAME>
+                    LAMBDA_ARN: <+execution.steps.get_lambda_arn.output.outputVariables.LAMBDA_ARN>
+                    REGION: <+pipeline.variables.REGION>
+           
+            - step:
+                type: Run
+                name: Verify CloudWatch Setup
+                identifier: verify_cloudwatch_setup
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Verifying CloudWatch schedule setup..."
+                   
+                    # Verify rule exists
+                    aws events describe-rule \
+                      --name ${RULE_NAME} \
+                      --region $REGION \
+                      --output table
+                   
+                    # Verify targets
+                    aws events list-targets-by-rule \
+                      --rule ${RULE_NAME} \
+                      --region $REGION \
+                      --output table
+                   
+                    echo "CloudWatch schedule setup completed for <+pipeline.variables.ENV>"
+                  envVariables:
+                    RULE_NAME: <+execution.steps.create_cloudwatch_rule.output.outputVariables.RULE_NAME>
+                    REGION: <+pipeline.variables.REGION>
+                  onFailure:
+                    errors:
+                      - AllErrors
+                    action:
+                      type: Abort
+                      spec:
+                        message: "CloudWatch setup verification failed"
+
+
+Complete Pipeline Structure:
+
+pipeline:
+  name: Lambda Deployment Pipeline
+  identifier: lambda_deployment_pipeline
+  projectIdentifier: your_project
+  orgIdentifier: your_org
+  
+  # Clone codebase ONCE at pipeline level
+  properties:
+    ci:
+      codebase:
+        connectorRef: account.Github_Connector
+        repoName: your-repo
+        build: <+input>
+  
+  stages:
+    - stage: Prepare         # No cloneCodebase here
+    - stage: Deploy Lambda   # No cloneCodebase here
+    - stage: Setup CloudWatch # No cloneCodebase here
