@@ -133,6 +133,385 @@ stages:
                     FUNCTION_NAME: <+pipeline.variables.FUNCTION_NAME>
                     REGION: <+pipeline.variables.REGION>
 stage:
+      name: Deploy Lambda
+      identifier: deploy_lambda
+      type: CI
+      spec:
+        cloneCodebase: true
+        platform:
+          os: Linux
+          arch: Amd64
+        runtime:
+          type: Cloud
+          spec: {}
+        infrastructure:
+          type: KubernetesDirect
+          spec:
+            connectorRef: <+input>
+            namespace: <+input>
+        execution:
+          steps:
+            - step:
+                type: Run
+                name: Set Environment Configuration
+                identifier: set_env_config
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    # Environment-specific configuration
+                    case "<+pipeline.variables.ENV>" in
+                      test)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-test"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-test"
+                        export REGION="us-east-1"
+                        ;;
+                      stage)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-stage"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-lambda-nonprod-role"
+                        export REGION="us-east-1"
+                        ;;
+                      prod)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-prod"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-lambda-prod-role"
+                        export REGION="us-east-1"
+                        ;;
+                      *)
+                        echo "ERROR: Invalid ENV selected: <+pipeline.variables.ENV>"
+                        exit 1
+                        ;;
+                    esac
+                   
+                    # Export variables for subsequent steps
+                    echo "FUNCTION_NAME=${FUNCTION_NAME}" >> $HARNESS_ENV
+                    echo "LAMBDA_ROLE=${LAMBDA_ROLE}" >> $HARNESS_ENV
+                    echo "REGION=${REGION}" >> $HARNESS_ENV
+                   
+                    echo "Configuration set for environment: <+pipeline.variables.ENV>"
+                    echo "Function: ${FUNCTION_NAME}"
+                    echo "Role: ${LAMBDA_ROLE}"
+                    echo "Region: ${REGION}"
+           
+            - step:
+                type: Run
+                name: Create Deployment Package
+                identifier: create_deployment_package
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    # Create Lambda deployment package
+                    echo "Creating Lambda deployment package..."
+                   
+                    export ZIP_FILE="lambda_deployment.zip"
+                   
+                    zip -r ${ZIP_FILE} lambda_function.py src/ config/ -x "*/__pycache__/*" "*.pyc" "*.pyo"
+                   
+                    echo "ZIP file created: $(ls -lah ${ZIP_FILE})"
+                   
+                    # Export for next step
+                    echo "ZIP_FILE=${ZIP_FILE}" >> $HARNESS_ENV
+           
+            - step:
+                type: Run
+                name: Deploy Lambda Function
+                identifier: deploy_lambda_function
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    # Check if function exists
+                    echo "Checking if Lambda function exists: $FUNCTION_NAME"
+                   
+                    if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION 2>/dev/null; then
+                      echo "Function exists, updating..."
+                     
+                      # Update function code
+                      aws lambda update-function-code \
+                        --function-name $FUNCTION_NAME \
+                        --zip-file fileb://${ZIP_FILE} \
+                        --region $REGION
+                     
+                      echo "Waiting for function to be active..."
+                      aws lambda wait function-active \
+                        --function-name $FUNCTION_NAME \
+                        --region $REGION
+                     
+                      echo "Lambda function updated successfully"
+                    else
+                      echo "Function does not exist, creating..."
+                     
+                      # Create function
+                      aws lambda create-function \
+                        --function-name $FUNCTION_NAME \
+                        --runtime python3.9 \
+                        --role ${LAMBDA_ROLE} \
+                        --handler lambda_handler.lambda_handler \
+                        --zip-file fileb://${ZIP_FILE} \
+                        --timeout 30 \
+                        --memory-size 256 \
+                        --region $REGION
+                     
+                      echo "Lambda function created successfully"
+                    fi
+                  envVariables:
+                    FUNCTION_NAME: <+execution.steps.set_env_config.output.outputVariables.FUNCTION_NAME>
+                    LAMBDA_ROLE: <+execution.steps.set_env_config.output.outputVariables.LAMBDA_ROLE>
+                    REGION: <+execution.steps.set_env_config.output.outputVariables.REGION>
+                    ZIP_FILE: <+execution.steps.create_deployment_package.output.outputVariables.ZIP_FILE>
+           
+            - step:
+                type: Run
+                name: Verify Deployment
+                identifier: verify_deployment
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    # Verify deployment
+                    echo "Verifying Lambda deployment..."
+                   
+                    aws lambda get-function \
+                      --function-name $FUNCTION_NAME \
+                      --region $REGION \
+                      --query 'Configuration.[FunctionName,Runtime,LastModified]' \
+                      --output table
+                   
+                    echo "Lambda deployment verified successfully"
+                  envVariables:
+                    FUNCTION_NAME: <+execution.steps.set_env_config.output.outputVariables.FUNCTION_NAME>
+                    REGION: <+execution.steps.set_env_config.output.outputVariables.REGION>
+                  onFailure:
+                    errors:
+                      - AllErrors
+                    action:
+                      type: Abort
+                      spec:
+                        message: "Lambda deployment failed: Check AWS credentials and permissions."
+           
+            - step:
+                type: Approval
+                name: Production Approval
+                identifier: prod_approval
+                spec:
+                  approvalMessage: "You are about to deploy to PROD. Continue?"
+                  includePipelineExecutionHistory: true
+                  approvers:
+                    userGroups:
+                      - account._account_all_users
+                    minimumCount: 1
+                    disallowPipelineExecutor: false
+                  approverInputs: []
+                when:
+                  stageStatus: Success
+                  condition: <+pipeline.variables.ENV> == "prod"
+                failureStrategies:
+                  - onFailure:
+                      errors:
+                        - AllErrors
+                      action:
+                        type: Abort
+
+
+
+Key Features:
+
+Environment Configuration - Switch/case logic for test/stage/prod environments with specific function names, roles, and regions
+
+Create Deployment Package - Zips the Lambda function code with exclusions for cache files
+
+Deploy Lambda Function - Smart deployment that:
+
+Checks if function exists
+Updates existing function OR creates new one
+Waits for function to be active
+Verify Deployment - Confirms successful deployment by querying the function configuration
+
+Production Approval - Manual approval step that only runs when deploying to prod (conditional execution)
+
+What to customize:
+
+Replace <PREFIX>, <ACCOUNT_ID>, <ROLE_PREFIX> with your actual values
+Update account.AWS_Connector to match your connector reference
+Adjust the handler path (lambda_handler.lambda_handler) to match your actual handler
+Modify memory size (256) and timeout (30) as needed
+Update the zip command paths (lambda_function.py src/ config/) to match your project structure
+Note: The approval step uses a conditional when clause so it only triggers for production deployments, just like your Jenkins input statement!
+
+
+abdullah shahid
+11:44 AM (2 hours ago)
+to me
+
+- stage:
+      name: Setup CloudWatch Schedule
+      identifier: setup_cloudwatch_schedule
+                      stage)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-stage"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-lambda-nonprod-role"
+                        ;;
+                      prod)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-prod"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-lambda-prod-role"
+                        ;;
+                      *)
+                        export FUNCTION_NAME="<PREFIX>-lambda-function-test"
+                        export LAMBDA_ROLE="arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_PREFIX>-access"
+                        ;;
+                    esac
+                   
+                    # Export variables for subsequent steps
+                    echo "FUNCTION_NAME=${FUNCTION_NAME}" >> $HARNESS_ENV
+                    echo "LAMBDA_ROLE=${LAMBDA_ROLE}" >> $HARNESS_ENV
+                   
+                    echo "Configuration set for environment: <+pipeline.variables.ENV>"
+                    echo "Function: ${FUNCTION_NAME}"
+           
+            - step:
+                type: Run
+                name: Get Lambda ARN
+                identifier: get_lambda_arn
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Fetching Lambda ARN..."
+                   
+                    LAMBDA_ARN=$(aws lambda get-function \
+                      --function-name $FUNCTION_NAME \
+                      --region $REGION \
+                      --query 'Configuration.FunctionArn' \
+                      --output text)
+                   
+                    echo "Lambda ARN: ${LAMBDA_ARN}"
+                   
+                    # Export for next steps
+                    echo "LAMBDA_ARN=${LAMBDA_ARN}" >> $HARNESS_ENV
+                  envVariables:
+                    FUNCTION_NAME: <+execution.steps.set_env_config.output.outputVariables.FUNCTION_NAME>
+                    REGION: <+pipeline.variables.REGION>
+           
+            - step:
+                type: Run
+                name: Create CloudWatch Events Rule
+                identifier: create_cloudwatch_rule
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Creating CloudWatch Events rule..."
+                   
+                    RULE_NAME="${FUNCTION_NAME}-schedule"
+                   
+                    aws events put-rule \
+                      --schedule-expression "rate(15 minutes)" \
+                      --name ${RULE_NAME} \
+                      --region $REGION
+                   
+                    echo "CloudWatch Events rule created: ${RULE_NAME}"
+                   
+                    # Export rule name for next steps
+                    echo "RULE_NAME=${RULE_NAME}" >> $HARNESS_ENV
+                  envVariables:
+                    FUNCTION_NAME: <+execution.steps.set_env_config.output.outputVariables.FUNCTION_NAME>
+                    REGION: <+pipeline.variables.REGION>
+           
+            - step:
+                type: Run
+                name: Add Lambda Permission for CloudWatch
+                identifier: add_lambda_permission
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Adding permission for CloudWatch to invoke Lambda..."
+                   
+                    STATEMENT_ID="${FUNCTION_NAME}-event"
+                   
+                    # Remove existing permission if it exists (ignore errors)
+                    aws lambda remove-permission \
+                      --function-name $FUNCTION_NAME \
+                      --statement-id ${STATEMENT_ID} \
+                      --region $REGION 2>/dev/null || true
+                   
+                    # Add new permission
+                    aws lambda add-permission \
+                      --function-name $FUNCTION_NAME \
+                      --statement-id ${STATEMENT_ID} \
+                      --action lambda:InvokeFunction \
+                      --principal events.amazonaws.com \
+                      --region $REGION
+                   
+                    echo "Permission added for CloudWatch to invoke Lambda"
+                  envVariables:
+                    FUNCTION_NAME: <+execution.steps.set_env_config.output.outputVariables.FUNCTION_NAME>
+                    REGION: <+pipeline.variables.REGION>
+           
+            - step:
+                type: Run
+                name: Create CloudWatch Events Target
+                identifier: create_cloudwatch_target
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Creating target for CloudWatch Events..."
+                   
+                    aws events put-targets \
+                      --rule ${RULE_NAME} \
+                      --targets "Id"="1","Arn"="${LAMBDA_ARN}" \
+                      --region $REGION
+                   
+                    echo "CloudWatch Events target created successfully"
+                  envVariables:
+                    RULE_NAME: <+execution.steps.create_cloudwatch_rule.output.outputVariables.RULE_NAME>
+                    LAMBDA_ARN: <+execution.steps.get_lambda_arn.output.outputVariables.LAMBDA_ARN>
+                    REGION: <+pipeline.variables.REGION>
+           
+            - step:
+                type: Run
+                name: Verify CloudWatch Setup
+                identifier: verify_cloudwatch_setup
+                spec:
+                  connectorRef: account.AWS_Connector
+                  shell: Bash
+                  command: |
+                    set -e
+                   
+                    echo "Verifying CloudWatch schedule setup..."
+                   
+                    # Verify rule exists
+                    aws events describe-rule \
+                      --name ${RULE_NAME} \
+                      --region $REGION \
+                      --output table
+                   
+                    # Verify targets
+                    aws events list-targets-by-rule \
+                      --rule ${RULE_NAME} \
+                      --region $REGION \
+                      --output table
+                   
+                    echo "CloudWatch schedule setup completed for <+pipeline.variables.ENV>"
+                  envVariables:
+                    RULE_NAME: <+execution.steps.create_cloudwatch_rule.output.outputVariables.RULE_NAME>
+                    REGION: <+pipeline.variables.REGION>
+                  onFailure:
+                    errors:
+                      - AllErrors
+                    action:
+                      type: Abort
+                      spec:
+                        message: "CloudWatch setup verification failed"
+stage:
       name: Setup CloudWatch Schedule
       identifier: setup_cloudwatch_schedule
       type: CI
