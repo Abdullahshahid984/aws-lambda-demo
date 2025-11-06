@@ -1,0 +1,30 @@
+service:
+  name: lambda-service
+  identifier: lambdaservice
+  orgIdentifier: default
+  projectIdentifier: lambda
+  serviceDefinition:
+    type: AwsLambda 
+    spec:
+      manifests:
+        - manifest:
+            identifier: lambda_manifest
+            type: AwsLambdaFunctionDefinition
+            spec:
+              store:
+                type: Github
+                spec:
+                  connectorRef: org.githupharness
+                  gitFetchType: Branch
+                  # paths:
+                  #  - lambda_defination
+                 # repoName: lambda-demo
+                  branch: harness
+                  paths:
+                   - test/devtest/lambda-service.yaml
+   # artifacts:
+      #primary:
+     #   type: Harness
+       # spec:
+     #     fileReference: /.harness/lambda_package.zip
+   
