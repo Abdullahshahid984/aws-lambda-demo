@@ -36,10 +36,15 @@ pipeline:
                     command: |
                       echo "Installing Python dependencies..."
                       mkdir -p python
-                      pip install -r test/devtest/requirements.txt -t python
-                      
+                     
+                      # Install dependencies from devtest (not test/devtest)
+                      pip install -r devtest/requirements.txt -t python
+                     
                       # Package dependencies into a Lambda Layer
                       zip -r layer_package.zip python
+                     
+                      echo "Layer package created successfully"
+                      ls -lh layer_package.zip
 
               - step:
                   name: Package Lambda
@@ -51,11 +56,20 @@ pipeline:
                     shell: Sh
                     command: |
                       echo "Zipping Lambda function code..."
-                      zip -r lambda_package.zip test \
+                     
+                      # Zip the devtest directory (not test)
+                      zip -r lambda_package.zip devtest \
                         -x "**/.git/*" \
                         -x "**/README.md" \
-                        -x "**/Jenkinsfile"
+                        -x "**/Jenkinsfile" \
+                        -x "**/__pycache__/*" \
+                        -x "**/*.pyc"
+                     
+                      echo "Lambda package contents:"
                       unzip -l lambda_package.zip
+                     
+                      echo "Package size:"
+                      ls -lh lambda_package.zip
 
               # Optional Sonar step
               # - step:
@@ -63,13 +77,14 @@ pipeline:
               #     identifier: SonarQube
               #     type: Run
               #     spec:
+              #       connectorRef: my_docker_connector
               #       image: sonarsource/sonar-scanner-cli
               #       shell: Sh
               #       command: |
               #         sonar-scanner \
               #           -Dsonar.projectKey=aws-lambda \
               #           -Dsonar.organization=your-org \
-              #           -Dsonar.sources=. \
+              #           -Dsonar.sources=devtest \
               #           -Dsonar.host.url=https://sonarcloud.io \
               #           -Dsonar.login=<+secrets.getValue("SONAR_TOKEN")>
 
@@ -97,11 +112,13 @@ pipeline:
                       export AWS_DEFAULT_REGION=us-east-1
                       LAYER_NAME="hey-world-deps-<+env.name>"
 
-                      echo "Publishing Lambda Layer..."
+                      echo "Publishing Lambda Layer: $LAYER_NAME"
+                     
                       LAYER_VERSION=$(aws lambda publish-layer-version \
                         --layer-name $LAYER_NAME \
                         --zip-file fileb://layer_package.zip \
                         --compatible-runtimes python3.13 \
+                        --description "Dependencies for hey-world Lambda - <+env.name> environment" \
                         --query Version --output text)
 
                       echo "Layer version published: $LAYER_VERSION"
@@ -125,6 +142,7 @@ pipeline:
                       ZIP_FILE="lambda_package.zip"
                       LAYER_VERSION="<+steps.PublishLayer.output.outputVariables.LAYER_VERSION>"
 
+                      # Set role ARN based on environment
                       ROLE_ARN=""
                       if [ "<+env.name>" = "dev" ]; then
                         ROLE_ARN="arn:aws:iam::529088259986:role/lambda_exec_role_dev"
@@ -132,27 +150,50 @@ pipeline:
                         ROLE_ARN="arn:aws:iam::529088259986:role/lambda_exec_role_stage"
                       elif [ "<+env.name>" = "prod" ]; then
                         ROLE_ARN="arn:aws:iam::529088259986:role/lambda_exec_role_prod"
+                      else
+                        echo "ERROR: Unknown environment <+env.name>"
+                        exit 1
                       fi
 
+                      echo "Deploying Lambda function: $FUNCTION_NAME"
+                     
+                      # Check if function exists
                       if ! aws lambda get-function --function-name $FUNCTION_NAME > /dev/null 2>&1; then
                         echo "Creating new Lambda function..."
                         aws lambda create-function \
                           --function-name $FUNCTION_NAME \
                           --runtime python3.13 \
                           --role $ROLE_ARN \
-                          --handler hello-world.lambda_function.lambda_handler \
+                          --handler devtest.function.lambda_handler \
                           --zip-file fileb://$ZIP_FILE \
-                          --layers arn:aws:lambda:us-east-1:529088259986:layer:hey-world-deps-<+env.name>:$LAYER_VERSION
+                          --layers arn:aws:lambda:us-east-1:529088259986:layer:hey-world-deps-<+env.name>:$LAYER_VERSION \
+                          --timeout 30 \
+                          --memory-size 256 \
+                          --description "Hey World Lambda function - <+env.name> environment"
+                       
+                        echo "Waiting for function to become active..."
                         aws lambda wait function-active --function-name $FUNCTION_NAME
+                        echo "Function created successfully"
+                      else
+                        echo "Function exists, updating..."
                       fi
 
+                      # Update function code
+                      echo "Updating function code..."
                       aws lambda update-function-code \
                         --function-name $FUNCTION_NAME \
                         --zip-file fileb://$ZIP_FILE
+                     
+                      # Wait for update to complete
+                      aws lambda wait function-updated --function-name $FUNCTION_NAME
 
+                      # Update function configuration with new layer
+                      echo "Updating function configuration..."
                       aws lambda update-function-configuration \
                         --function-name $FUNCTION_NAME \
                         --layers arn:aws:lambda:us-east-1:529088259986:layer:hey-world-deps-<+env.name>:$LAYER_VERSION
+                     
+                      echo "Lambda function deployed successfully"
 
               - step:
                   name: Setup CloudWatch Schedule
@@ -169,27 +210,48 @@ pipeline:
                       SCHEDULE="rate(5 minutes)"
                       STATEMENT_ID="cw-invoke-<+env.name>"
 
+                      echo "Creating CloudWatch Events rule: $RULE_NAME"
                       aws events put-rule \
                         --name $RULE_NAME \
                         --schedule-expression "$SCHEDULE" \
-                        --state ENABLED
+                        --state ENABLED \
+                        --description "Trigger hey-world Lambda every 5 minutes - <+env.name>"
 
-                      FUNCTION_ARN=$(aws lambda get-function --function-name $FUNCTION_NAME --query 'Configuration.FunctionArn' --output text)
+                      # Get function ARN
+                      FUNCTION_ARN=$(aws lambda get-function \
+                        --function-name $FUNCTION_NAME \
+                        --query 'Configuration.FunctionArn' \
+                        --output text)
+                     
+                      echo "Function ARN: $FUNCTION_ARN"
 
+                      # Add Lambda as target
+                      echo "Adding Lambda as target to CloudWatch Events rule..."
                       aws events put-targets \
                         --rule $RULE_NAME \
                         --targets "Id"="1","Arn"=$FUNCTION_ARN
 
-                      SOURCE_ARN=$(aws events describe-rule --name $RULE_NAME --query 'Arn' --output text)
+                      # Get rule ARN
+                      SOURCE_ARN=$(aws events describe-rule \
+                        --name $RULE_NAME \
+                        --query 'Arn' \
+                        --output text)
+                     
+                      echo "Rule ARN: $SOURCE_ARN"
 
-                      if ! aws lambda get-policy --function-name $FUNCTION_NAME | grep -q $STATEMENT_ID; then
-                        echo "Adding new permission..."
+                      # Check if permission already exists
+                      echo "Checking Lambda permissions..."
+                      if ! aws lambda get-policy --function-name $FUNCTION_NAME 2>/dev/null | grep -q $STATEMENT_ID; then
+                        echo "Adding CloudWatch Events permission to Lambda..."
                         aws lambda add-permission \
                           --function-name $FUNCTION_NAME \
                           --statement-id $STATEMENT_ID \
                           --action 'lambda:InvokeFunction' \
                           --principal events.amazonaws.com \
                           --source-arn $SOURCE_ARN
+                        echo "Permission added successfully"
                       else
                         echo "Permission already exists, skipping..."
                       fi
+                     
+                      echo "CloudWatch Events schedule configured successfully"
