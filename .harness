@@ -7,7 +7,7 @@ pipeline:
   properties:
     ci:
       codebase:
-        connectorRef: github_connector   # <-- Harness Git Connector
+        connectorRef: githupharness  # <-- Harness Git Connector
         repoName: AngelsTech/aws-lambda-demo
         build: <+input>                  # pipeline input for git branch
 
@@ -21,8 +21,8 @@ pipeline:
           infrastructure:
             type: KubernetesDirect
             spec:
-              connectorRef: my_k8s_connector
-              namespace: harness-delegate
+              connectorRef: eksconnector
+              namespace: harness-delegate-ng
           execution:
             steps:
               - step:
@@ -30,7 +30,7 @@ pipeline:
                   identifier: Install_Dependencies
                   type: Run
                   spec:
-                    connectorRef: my_docker_connector
+                    connectorRef: eksconnector
                     image: python:3.13
                     shell: Sh
                     command: |
@@ -51,7 +51,7 @@ pipeline:
                   identifier: Package_Lambda
                   type: Run
                   spec:
-                    connectorRef: my_docker_connector
+                    connectorRef: eksconnector
                     image: python:3.13
                     shell: Sh
                     command: |
@@ -105,7 +105,7 @@ pipeline:
                   identifier: PublishLayer
                   type: Run
                   spec:
-                    connectorRef: my_docker_connector
+                    connectorRef: eksconnector
                     image: amazon/aws-cli:2.15.0
                     shell: Sh
                     command: |
@@ -133,7 +133,7 @@ pipeline:
                   identifier: DeployLambda
                   type: Run
                   spec:
-                    connectorRef: my_docker_connector
+                    connectorRef: eksconnector
                     image: amazon/aws-cli:2.15.0
                     shell: Sh
                     command: |
@@ -200,7 +200,7 @@ pipeline:
                   identifier: CloudWatch
                   type: Run
                   spec:
-                    connectorRef: my_docker_connector
+                    connectorRef: eksconnector
                     image: amazon/aws-cli:2.15.0
                     shell: Sh
                     command: |
