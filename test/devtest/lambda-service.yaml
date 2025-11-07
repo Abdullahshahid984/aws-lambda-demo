@@ -21,7 +21,7 @@ service:
                  # repoName: lambda-demo
                   branch: harness
                   paths:
-                   - test/devtest/lambda-service.yaml
+                   - devtest/lambda-service.yaml
    # artifacts:
       #primary:
      #   type: Harness
