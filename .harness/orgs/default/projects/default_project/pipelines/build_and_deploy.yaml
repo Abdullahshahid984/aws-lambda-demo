@@ -83,16 +83,19 @@ pipeline:
               action:
                 type: StageRollback
         spec:
-          deploymentType: ServerlessAwsLambda
+          deploymentType: AwsLambda
           service:
             serviceRef: <+input>
-            serviceInputs: <+input>
+            serviceInputs:
+              serviceDefinition:
+                type: AwsLambda
+                spec:
+                  variables: []
           environment:
             environmentRef: <+input>
             deployToAll: false
             infrastructureDefinitions:
               - identifier: aws_lambda_infra
-            environmentInputs: <+input>
           execution:
             steps:
               - step:
