@@ -7,8 +7,8 @@ pipeline:
   properties:
     ci:
       codebase:
-        connectorRef: githupharness
-        repoName: AngelsTech/aws-lambda-demo
+        connectorRef: <+input>
+        repoName: aws-lambda-demo
         build: <+input>
   stages:
     - stage:
@@ -38,9 +38,12 @@ pipeline:
                     image: python:3.13
                     shell: Sh
                     command: |
+                      echo "Installing system dependencies..."
+                      apt-get update && apt-get install -y zip
+
                       echo "Installing Python dependencies..."
                       mkdir -p python
-                      pip install -r devtest/requirements.txt -t python
+                      pip install -r test/devtest/requirements.txt -t python
                       zip -r layer_package.zip python
                       echo "Layer package created successfully"
                       ls -lh layer_package.zip
@@ -53,43 +56,22 @@ pipeline:
                     image: python:3.13
                     shell: Sh
                     command: |
+                      echo "Installing zip utility..."
+                      apt-get update && apt-get install -y zip
+
                       echo "Zipping Lambda function code..."
-                      zip -r lambda_package.zip devtest \
+                      cd test
+                      zip -r ../lambda_package.zip devtest \
                         -x "**/.git/*" \
                         -x "**/README.md" \
                         -x "**/Jenkinsfile" \
                         -x "**/__pycache__/*" \
                         -x "**/*.pyc"
+                      cd ..
                       echo "Lambda package contents:"
                       unzip -l lambda_package.zip
                       echo "Package size:"
                       ls -lh lambda_package.zip
-              - step:
-                  name: Upload_Artifacts_to_S3
-                  identifier: Upload_Artifacts_to_S3
-                  type: Run
-                  spec:
-                    connectorRef: eksconnector
-                    image: amazon/aws-cli:2.15.0
-                    shell: Sh
-                    command: |
-                      export AWS_DEFAULT_REGION=us-east-1
-                      S3_BUCKET="harness-lambda-artifacts"  # Update with your S3 bucket
-                      BUILD_ID="<+pipeline.executionId>"
-
-                      echo "Uploading artifacts to S3..."
-                      aws s3 cp layer_package.zip s3://$S3_BUCKET/$BUILD_ID/layer_package.zip
-                      aws s3 cp lambda_package.zip s3://$S3_BUCKET/$BUILD_ID/lambda_package.zip
-
-                      echo "Artifacts uploaded successfully"
-                      echo "BUILD_ID=$BUILD_ID" >> build.env
-                    outputVariables:
-                      - name: BUILD_ID
-                        type: String
-                        value: BUILD_ID
-                    envVariables:
-                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_id")>
-                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_access_key")>
     - stage:
         name: Deploy_Lambda
         identifier: Deploy_Lambda
@@ -117,27 +99,48 @@ pipeline:
           execution:
             steps:
               - step:
-                  name: Download_Artifacts_from_S3
-                  identifier: Download_Artifacts_from_S3
+                  name: Install_Dependencies
+                  identifier: Install_Dependencies_Deploy
                   type: Run
                   spec:
                     connectorRef: eksconnector
-                    image: amazon/aws-cli:2.15.0
+                    image: python:3.13
                     shell: Sh
                     command: |
-                      export AWS_DEFAULT_REGION=us-east-1
-                      S3_BUCKET="harness-lambda-artifacts"  # Update with your S3 bucket
-                      BUILD_ID="<+pipeline.stages.Build_and_Package.spec.execution.steps.Upload_Artifacts_to_S3.output.outputVariables.BUILD_ID>"
+                      echo "Installing system dependencies..."
+                      apt-get update && apt-get install -y zip
 
-                      echo "Downloading artifacts from S3..."
-                      aws s3 cp s3://$S3_BUCKET/$BUILD_ID/layer_package.zip layer_package.zip
-                      aws s3 cp s3://$S3_BUCKET/$BUILD_ID/lambda_package.zip lambda_package.zip
+                      echo "Installing Python dependencies..."
+                      mkdir -p python
+                      pip install -r test/devtest/requirements.txt -t python
+                      zip -r layer_package.zip python
+                      echo "Layer package created successfully"
+                      ls -lh layer_package.zip
+              - step:
+                  name: Package_Lambda
+                  identifier: Package_Lambda_Deploy
+                  type: Run
+                  spec:
+                    connectorRef: eksconnector
+                    image: python:3.13
+                    shell: Sh
+                    command: |
+                      echo "Installing zip utility..."
+                      apt-get update && apt-get install -y zip
 
-                      echo "Artifacts downloaded successfully"
-                      ls -lh *.zip
-                    envVariables:
-                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_id")>
-                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_access_key")>
+                      echo "Zipping Lambda function code..."
+                      cd test
+                      zip -r ../lambda_package.zip devtest \
+                        -x "**/.git/*" \
+                        -x "**/README.md" \
+                        -x "**/Jenkinsfile" \
+                        -x "**/__pycache__/*" \
+                        -x "**/*.pyc"
+                      cd ..
+                      echo "Lambda package contents:"
+                      unzip -l lambda_package.zip
+                      echo "Package size:"
+                      ls -lh lambda_package.zip
               - step:
                   name: Publish_Lambda_Layer
                   identifier: Publish_Lambda_Layer
@@ -160,9 +163,6 @@ pipeline:
 
                       echo "Layer version published: $LAYER_VERSION"
                       echo "LAYER_VERSION=$LAYER_VERSION" >> layer.env
-                    envVariables:
-                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_id")>
-                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_access_key")>
                     outputVariables:
                       - name: LAYER_VERSION
                         type: String
@@ -203,7 +203,7 @@ pipeline:
                           --function-name $FUNCTION_NAME \
                           --runtime python3.13 \
                           --role $ROLE_ARN \
-                          --handler devtest.function.lambda_handler \
+                          --handler devtest.lambda_function.lambda_handler \
                           --zip-file fileb://$ZIP_FILE \
                           --layers arn:aws:lambda:us-east-1:529088259986:layer:hey-world-deps-<+env.name>:$LAYER_VERSION \
                           --timeout 30 \
@@ -240,9 +240,6 @@ pipeline:
                         --output text)
 
                       echo "Lambda function deployed: $FUNCTION_ARN"
-                    envVariables:
-                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_id")>
-                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_access_key")>
               - step:
                   name: Setup_CloudWatch_Schedule
                   identifier: Setup_CloudWatch_Schedule
@@ -297,9 +294,6 @@ pipeline:
                       fi
 
                       echo "CloudWatch schedule setup complete"
-                    envVariables:
-                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_id")>
-                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_access_key")>
               - step:
                   name: Test_Lambda_Function
                   identifier: Test_Lambda_Function
@@ -332,7 +326,4 @@ pipeline:
                         echo "Lambda test failed!"
                         exit 1
                       fi
-                    envVariables:
-                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_id")>
-                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_access_key")>
             rollbackSteps: []
