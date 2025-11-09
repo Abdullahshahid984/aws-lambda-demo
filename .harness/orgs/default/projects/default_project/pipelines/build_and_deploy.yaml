@@ -91,16 +91,13 @@ pipeline:
           deploymentType: AwsLambda
           service:
             serviceRef: <+input>
-            serviceInputs:
-              serviceDefinition:
-                type: AwsLambda
-                spec:
-                  variables: []
+            serviceInputs: <+input>
           environment:
             environmentRef: <+input>
             deployToAll: false
             infrastructureDefinitions:
               - identifier: awslambdainfra
+            environmentInputs: <+input>
           execution:
             steps:
               - step:
